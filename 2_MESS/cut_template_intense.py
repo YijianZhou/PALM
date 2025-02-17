@@ -118,8 +118,8 @@ class Cut_Templates(Dataset):
             if np.amax(snr_p)<min_snr: continue
         # write & record out_paths
         data_paths_i.append([])
-        for tr in st:
-            out_path = os.path.join(event_dir,'%s.%s'%(net_sta,tr.stats.channel))
+        for ii,tr in enumerate(st):
+            out_path = os.path.join(event_dir,'%s.%s'%(net_sta,ii))
             if not 'sac' in tr.stats:
                 tr.write(out_path, format='sac')
                 tr = read(out_path)[0]
