@@ -34,7 +34,7 @@ def get_1chn_data(date, data_dir):
         else: data_dict[net_sta] = [st_path]
     # expand single channel station
     for net_sta in data_dict:
-        if len(data_dict[net_sta])!=3: data_dict[net_sta] = [data_dict[net_sta][-1]]*3
+        if len(data_dict[net_sta])<3: data_dict[net_sta] = [data_dict[net_sta][-1]]*3
     return data_dict
 
 # read stream data
