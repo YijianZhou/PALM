@@ -78,11 +78,13 @@ class Run_HypoDD(Dataset):
         mag = mag_dict[evid]
         # get loc info
         lat, lon, dep = codes[1:4]
-        dep = round(float(dep) - dep_corr, 2)
+        try: dep = round(float(dep) - dep_corr, 2)
+        except: continue
         # get time info
         year, mon, day, hour, mnt, sec = codes[10:16]
         sec = '59.999' if sec=='60.000' else sec
-        ot = UTCDateTime('{}{:0>2}{:0>2}{:0>2}{:0>2}{:0>6}'.format(year, mon, day, hour, mnt, sec))
+        try: ot = UTCDateTime('{}{:0>2}{:0>2}{:0>2}{:0>2}{:0>6}'.format(year, mon, day, hour, mnt, sec))
+        except: continue
         out_ctlg.write('{},{},{},{},{}\n'.format(ot, lat, lon, dep, mag))
         out_pha.write('{},{},{},{},{}\n'.format(ot, lat, lon, dep, mag))
         out_pha_full.write('{},{},{},{},{},{}\n'.format(ot, lat, lon, dep, mag, evid))
