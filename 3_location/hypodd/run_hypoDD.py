@@ -1,4 +1,9 @@
-import os, shutil, glob
+import glob
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
 import numpy as np
 import torch.multiprocessing as mp
 from torch.utils.data import Dataset, DataLoader
@@ -8,11 +13,25 @@ import config
 # reloc config
 cfg = config.Config()
 ctlg_code = cfg.ctlg_code
-dep_corr = cfg.dep_corr
+dep_corr = cfg.hypodd_depth_offset_km
 num_grids = cfg.num_grids
 num_workers = cfg.num_workers
 keep_grids = cfg.keep_grids
 hypo_root = cfg.hypo_root
+mft_output_root = Path(cfg.mft_output_root).expanduser().resolve()
+
+
+def stage_mft_inputs():
+    """Copy finalized MFT relocation inputs into hypoDD's working directory."""
+    input_dir = Path('input')
+    input_dir.mkdir(parents=True, exist_ok=True)
+    for name in ('event.dat', 'dt.cc'):
+        source = mft_output_root / name
+        if not source.is_file():
+            raise FileNotFoundError(
+                '{} is missing; finish MFT association first'.format(source)
+            )
+        shutil.copy2(source, input_dir / name)
 
 # write hypoDD input file
 def write_fin(i,j):
@@ -75,11 +94,11 @@ class Run_HypoDD(Dataset):
 
 
 if __name__ == '__main__':
-    # 1. format fsta + assoc MFT det + grid event
+    # 1. stage finalized MFT products, format stations, and grid events
     print('format input files')
-    os.system('python mk_sta.py')
-    os.system('python mk_dt.py')
-    os.system('python mk_event.py')
+    stage_mft_inputs()
+    subprocess.check_call([sys.executable, 'mk_sta.py'])
+    subprocess.check_call([sys.executable, 'mk_event.py'])
     evid_lists = np.load('input/evid_lists.npy', allow_pickle=True)
     mag_dict = get_mag_dict()
     # 2. run hypoDD

@@ -4,10 +4,12 @@ class Config(object):
   def __init__(self):
 
     # template cut
-    self.win_len = [10,20]         # cut template length
     self.win_snr = [1,1]           # sec pre-post P for SNR calc 
     self.win_sta_lta = [8,1]       # STA/LTA measurement for SNR
     self.min_snr = 12              # defined by energy
+    self.template_preprocess_padding_sec = 15.0
+    self.template_shard_size = 512
+    self.template_log_interval = 10
     # MFT params
     self.min_sta = 4               # min sta num for template event
     self.max_sta = 15              # max sta num for template event
@@ -22,10 +24,20 @@ class Config(object):
     self.chn_p = [2]               # chn for P pick
     self.chn_s = [0,1]             # chn for S pick
     self.amp_win = [1,5]           # win for amp measurement
+    # final association and hypoDD inputs
+    self.association_origin_time_tolerance_sec = 2.0
+    self.association_detection_cc_min = 0.3
+    self.association_phase_cc_min = 0.4
+    self.association_max_phase_shift_sec = [0.6, 1.0]  # P, S
+    self.association_min_neighbor_templates = 2
+    self.association_max_neighbor_templates = 30
+    self.association_start_event_id = 1000000
+    self.hypodd_depth_offset_km = 5.0  # keep initial depths below surface
     # data process
     self.data_buffer_sec = 30.0     # adjacent-day context on each side
     self.taper_max_length_sec = 5.0 # taper cap at each buffered outer edge
-    self.samp_rate = 50
+    self.samp_rate = 50              # MFT detection rate; GPU data use this rate
+    self.phase_samp_rate = 100       # P/S CC picking and amplitude rate; kept on CPU
     self.freq_band = [1.,20.]
     self.num_workers = 10
     self.get_data_dict = dp.get_data_dict

@@ -23,20 +23,20 @@ CASE_CODE = "eg"
 DATA_DIR = Path("/data/Example_data")
 TEMPLATE_PHASE_FILE = Path("input/eg_mft.temp")
 OUTPUT_ROOT = Path("output/Example_templates")
-CUT_METHOD = "intense"  # "intense" or "long"
+OVERWRITE_TEMPLATES = False
 
 
 def main():
-  if CUT_METHOD not in {"intense", "long"}:
-    raise ValueError("CUT_METHOD must be 'intense' or 'long'")
   mft_source = Path(PALM_ROOT).expanduser() / "MFT_src"
   command = [
       sys.executable,
-      str(mft_source / "cut_template_{}.py".format(CUT_METHOD)),
+      str(mft_source / "cut_template.py"),
       "--data_dir", str(resolve_path(DATA_DIR)),
       "--temp_pha", str(resolve_path(TEMPLATE_PHASE_FILE)),
       "--out_root", str(resolve_path(OUTPUT_ROOT)),
   ]
+  if OVERWRITE_TEMPLATES:
+    command.append("--overwrite")
   subprocess.check_call(
       command,
       cwd=str(RUN_DIR),

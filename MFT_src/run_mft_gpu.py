@@ -38,6 +38,11 @@ if __name__ == '__main__':
   # MFT params
   cfg = config.Config()
   min_sta = cfg.min_sta
+  print(
+      'sample rates: {} Hz GPU detection, {} Hz CPU phase picking'.format(
+          cfg.samp_rate, cfg.phase_samp_rate
+      )
+  )
   data_buffer_sec = float(getattr(cfg, 'data_buffer_sec', 30.0))
   if data_buffer_sec < 0:
     raise ValueError('data_buffer_sec must be nonnegative')
@@ -81,7 +86,7 @@ if __name__ == '__main__':
             print('det_ot {}, det_cc {:.2f}'.format(det_ot, det_cc))
             for i in range(len(picks)):
                 picks[i][1:3] = [data_start + t_rel for t_rel in picks[i][1:3]]
-                print('{0[0]:<7} | dt_p {0[3]:<5.2f}s, dt_s {0[4]:<5.2f}s | cc_p {0[6]:.3f}, cc_s {0[7]:.3f}'.format(picks[i]))
+                print('{0[0]:<7} | dt_p {0[3]:<5.2f}s, dt_s {0[4]:<5.2f}s | cc_p {0[6]:.3f}, cc_s {0[7]:.3f}, cc_det_phase {0[8]:.3f}'.format(picks[i]))
             write_ctlg(det_ot, det_cc, temp_name, temp_loc, out_ctlg)
             write_pha(det_ot, det_cc, temp_name, temp_loc, picks, out_pha)
     del data_dict

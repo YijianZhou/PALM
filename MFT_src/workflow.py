@@ -1,6 +1,8 @@
 """Path and process-environment helpers for MFT case launchers."""
 
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 
@@ -29,3 +31,26 @@ def source_environment(run_dir, palm_root, case_code):
   env["PYTHONPATH"] = os.pathsep.join(values)
   env["PALM_MFT_CONFIG"] = "config_{}".format(case_code)
   return env
+
+
+def run_association(
+    mft_source, run_dir, env, phase_files, template_phase_file,
+    station_file, time_range, output_root,
+):
+  """Associate all segment detections and publish final MFT products."""
+  phase_files = [Path(path) for path in phase_files]
+  if not phase_files:
+    raise ValueError("no MFT phase segments were produced")
+  output_root = Path(output_root)
+  command = [
+      sys.executable, str(Path(mft_source) / "associate_mft.py"),
+      "--det_pha", *[str(path) for path in phase_files],
+      "--temp_pha", str(template_phase_file),
+      "--sta_file", str(station_file),
+      "--time_range", str(time_range),
+      "--out_catalog", str(output_root / "catalog.csv"),
+      "--out_phase", str(output_root / "phase.csv"),
+      "--out_event", str(output_root / "event.dat"),
+      "--out_dt", str(output_root / "dt.cc"),
+  ]
+  subprocess.check_call(command, cwd=str(run_dir), env=env)

@@ -1,24 +1,28 @@
 """ Data i/o interface for MFT (CPU ver)
 """
-import os, glob, time
+import time
 import torch
 from torch.utils.data import Dataset, DataLoader
 import obspy
-from obspy import read, UTCDateTime
+from obspy import read
 import numpy as np
 import config
+from template_store import TemplateDataset, read_ftemp
 
 # import config
 cfg = config.Config()
 get_data_dict = cfg.get_data_dict
 num_workers = cfg.num_workers
 samp_rate = cfg.samp_rate
+phase_samp_rate = cfg.phase_samp_rate
+if phase_samp_rate < samp_rate:
+    raise ValueError("phase_samp_rate must be at least samp_rate")
 freq_band = cfg.freq_band
 taper_max_length_sec = float(cfg.taper_max_length_sec)
 temp_win_det = cfg.temp_win_det
 temp_win_p = cfg.temp_win_p
 temp_win_s = cfg.temp_win_s
-temp_win_npts = [int(sum(win)*samp_rate) for win in [temp_win_det, temp_win_p, temp_win_s]]
+temp_det_npts = int(sum(temp_win_det) * samp_rate)
 min_sta = cfg.min_sta
 max_sta = cfg.max_sta
 
@@ -39,7 +43,7 @@ def read_data(date, data_dir, sta_dict, buffer_seconds=0.0):
     Input
       data_dict = {net_sta: stream_paths}
     Output
-      data_dict = {net_sta: [data, norm_data]} 
+      data_dict = {net_sta: [detection_data, detection_norm, phase_data]}
     """
     t=time.time()
     print('reading continuous data')
@@ -71,9 +75,10 @@ def read_temp(temp_pha, temp_root):
     Output
       temp_list = [temp_name, temp_loc, temp_pick_dict]
       , where temp_pick_dict[net_sta] = [temp, norm_temp, dt_list]
-          temp = [temp_det, temp_p, temp_s]
-          norm_temp = [norm_det, norm_p, norm_s]
-          dt_list = [ttp, tts, dt_ot]
+          temp = [temp_det, temp_p, temp_s, temp_det_phase]
+          norm_temp = [norm_det, norm_p, norm_s, norm_det_phase]
+          dt_list = [detection-origin offset, P offset, S offset]
+          Detection values use samp_rate; P/S values use phase_samp_rate.
     """
     # 1. read phase file
     print('reading template phase file')
@@ -82,7 +87,10 @@ def read_temp(temp_pha, temp_root):
     print('reading templates')
     t=time.time()
     todel = []
-    temp_dataset = Templates(temp_list, temp_root)
+    temp_dataset = TemplateDataset(
+        temp_list, temp_root, max_sta, samp_rate, phase_samp_rate,
+        temp_win_det, temp_win_p, temp_win_s,
+    )
     temp_loader = DataLoader(temp_dataset, num_workers=num_workers, batch_size=None, pin_memory=True)
     for i, [temp_name, temp_loc, temp_pick_dict] in enumerate(temp_loader):
         if len(temp_pick_dict)<min_sta: todel.append(i)
@@ -111,84 +119,39 @@ class Data(Dataset):
         st_paths, gain, start_time=self.start_time, end_time=self.end_time
     )
     if len(stream)!=3: return net_sta, []
-    stream = preprocess(stream)
-    if len(stream)!=3: return net_sta, []
-    stream = trim_stream(stream, self.start_time, self.end_time)
-    expected_npts = int(round((self.end_time-self.start_time)*samp_rate))
-    data_np = st2np(stream)[:, 0:expected_npts]
+    phase_stream = preprocess(stream, phase_samp_rate)
+    if len(phase_stream)!=3: return net_sta, []
+    phase_stream = trim_stream(
+        phase_stream, self.start_time, self.end_time
+    )
+    detection_stream = resample_stream(phase_stream, samp_rate)
+    duration = self.end_time - self.start_time
+    phase_npts = int(round(duration * phase_samp_rate))
+    detection_npts = int(round(duration * samp_rate))
+    phase_data = st2np(phase_stream)[:, :phase_npts]
+    detection_data = st2np(detection_stream)[:, :detection_npts]
     # calc norm data (for calc_cc)
-    data_cum = [np.cumsum(di**2) for di in data_np]
-    norm_data = np.array([np.sqrt(di[temp_win_npts[0]:] - di[:-temp_win_npts[0]]) for di in data_cum])
-    return net_sta, [data_np.astype(np.float32), norm_data.astype(np.float32)]
+    data_cum = [
+        np.concatenate(([0.0], np.cumsum(di ** 2)))
+        for di in detection_data
+    ]
+    norm_data = np.array([
+        np.sqrt(di[temp_det_npts:] - di[:-temp_det_npts])
+        for di in data_cum
+    ])
+    return net_sta, [
+        detection_data.astype(np.float32),
+        norm_data.astype(np.float32),
+        phase_data.astype(np.float32),
+    ]
 
   def __len__(self):
     return len(self.sta_list)
 
 
-class Templates(Dataset):
-  """ Dataset for reading templates
-  """
-  def __init__(self, temp_list, temp_root):
-    self.temp_list = temp_list
-    self.temp_root = temp_root
-
-  def __getitem__(self, index):
-    # read one template
-    temp_name, temp_loc, pick_dict_picks = self.temp_list[index]
-    temp_dir = os.path.join(self.temp_root, temp_name.split('_')[1])
-    ot = temp_loc[0]
-    # select by tp (epicentral distance)
-    dtype = [('net_sta','O'),('tp','O')]
-    pick_list = np.array([(net_sta, tp) for net_sta, [tp,_] in pick_dict_picks.items()], dtype=dtype)
-    sta_list = list(np.sort(pick_list, order='tp')[0:max_sta]['net_sta'])
-    # read data
-    pick_dict_data = {}
-    for net_sta, [tp,ts] in pick_dict_picks.items():
-        if net_sta not in sta_list: continue
-        # read template date
-        st_paths = sorted(glob.glob(os.path.join(temp_dir, '%s.*'%net_sta)))
-        if len(st_paths)!=3: continue
-        st = read_stream(st_paths, None)
-        if len(st)!=3: continue
-        # cut template data
-        temp_det = trim_stream(st, tp-temp_win_det[0], tp+temp_win_det[1])
-        temp_p = trim_stream(st, tp-temp_win_p[0], tp+temp_win_p[1])
-        temp_s = trim_stream(st, ts-temp_win_s[0], ts+temp_win_s[1])
-        temp = [st2np(st_i).astype(np.float32) for st_i in [temp_det, temp_p, temp_s]]
-        temp = [temp[i][:,0:temp_win_npts[i]] for i in range(3)]
-        # calc norm
-        norm_det = np.array([sum(tr**2)**0.5 for tr in temp[0]])
-        norm_p = np.array([sum(tr**2)**0.5 for tr in temp[1]])
-        norm_s = np.array([sum(tr**2)**0.5 for tr in temp[2]])
-        norm_temp = [norm_det, norm_p, norm_s]
-        # get time shift (dt)
-        dt_list = [int(dt*samp_rate) for dt in [ot-tp+temp_win_det[0], tp-ot, ts-ot]]
-        pick_dict_data[net_sta] = [temp, norm_temp, dt_list]
-    return temp_name, temp_loc, pick_dict_data
-
-  def __len__(self):
-    return len(self.temp_list)
-
-
-# read template phase file
-def read_ftemp(ftemp):
-    f=open(ftemp); lines=f.readlines(); f.close()
-    temp_list = []
-    for line in lines:
-        codes = line.split(',')
-        if len(codes[0])>=14:
-            id_name = codes[0]
-            ot = UTCDateTime(codes[1])
-            lat, lon, dep, mag = [float(code) for code in codes[2:]]
-            event_loc = [ot, lat, lon, dep, mag]
-            temp_list.append([id_name, event_loc, {}])
-        else:
-            net_sta = codes[0]
-            tp, ts = [UTCDateTime(code) for code in codes[1:3]]
-            temp_list[-1][-1][net_sta] = [tp, ts]
-    return temp_list
-
-def preprocess(stream):
+def preprocess(stream, target_sample_rate=None):
+    if target_sample_rate is None:
+        target_sample_rate = samp_rate
     # time alignment
     start_time = max([trace.stats.starttime for trace in stream])
     end_time = min([trace.stats.endtime for trace in stream])
@@ -198,8 +161,15 @@ def preprocess(stream):
         max_percentage=0.05, max_length=taper_max_length_sec
     )
     # resample data
-    org_rate = st[0].stats.sampling_rate
-    if org_rate!=samp_rate: st.resample(samp_rate)
+    minimum_rate = min(trace.stats.sampling_rate for trace in st)
+    if minimum_rate < target_sample_rate * (1.0 - 1e-6):
+        print('data rate is below requested {} Hz'.format(target_sample_rate))
+        return []
+    if any(
+        not np.isclose(trace.stats.sampling_rate, target_sample_rate)
+        for trace in st
+    ):
+        st.resample(target_sample_rate)
     for ii in range(3):
         st[ii].data[np.isnan(st[ii].data)] = 0
         st[ii].data[np.isinf(st[ii].data)] = 0
@@ -213,6 +183,17 @@ def preprocess(stream):
         return st.filter('lowpass', freq=freq_max)
     else:
         print('filter type not supported!'); return []
+
+def resample_stream(stream, target_sample_rate):
+    st = stream.copy()
+    if any(
+        not np.isclose(trace.stats.sampling_rate, target_sample_rate)
+        for trace in st
+    ):
+        st.resample(target_sample_rate)
+    for trace in st:
+        trace.data[~np.isfinite(trace.data)] = 0
+    return st
 
 def normalize_stream_channels(stream):
     stream.sort(keys=["channel"])
