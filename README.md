@@ -1,47 +1,118 @@
-# PALM 4.x  
-An Earthquake Detection and Location Architecture for Continuous Seismograms: Phase Picking, Association, Location, and Matched Filter (PALM)  
-  
-## PALM Workflow  
-![Zhou et al., (2021)](./doc/PALM_workflow.jpg)  
+# PALM
 
-### 1. PAL
-1.1 phase **P**icking  
-1.2 phase **A**ssociation  
-1.3 event **L**ocation  
+Phase Picking, Association, Location, and Matched Filter workflow for building
+high-resolution earthquake catalogs. PAL or AI-PAL detections can provide the
+event templates used by the matched-filter (MFT) stage.
 
-- **Usage** (see *run_pal* for example workdir)  
-(1) Prepare continuous data into consistent directory structure  
-(2) Run PAL  
+![PALM workflow](References/PALM_workflow.jpg)
 
-### 2. MESS  
-2.1 **M**atch: calculate CC trace on every station (matched filter)  
-2.2 **E**xpand: expand peak values on CC traces  
-2.3 **S**hift: time shift to origin times for all CC traces  
-2.4 **S**tack: stack CC traces of different stations & detect events on the stacked trace  
-2.5 *dt_p* and *dt_s* are picked by cross-correlation  
+## Project Layout
 
-- **Usage** (see *run_mess* for example workdir)  
-(1) Prepare template phase file (i.e. run PAL) & cut template waveform  
-(2) Run MESS  
+```text
+PALM/
+|-- 1_run_pal/       Numbered current PAL workflows for local or AWS execution
+|-- 2_run_mft/       Numbered template-selection and matched-filter workflows
+|-- 3_location/      Relocation tools for matched-filter detections
+|-- PAL_src/         Shared current PAL implementation
+|-- MFT_src/         Shared CPU/GPU MFT matched-filter implementation
+`-- References/      Documentation and archived historical PALM source
+```
 
+Executable directories contain case settings, input metadata, and numbered
+launchers. Shared source directories contain implementation code and should not
+be edited or overwritten when starting a new experiment.
 
-## Tutorials  
+## 1. PAL
 
-2021/10 Online training in Chinese: vedio recording on [KouShare](https://www.koushare.com/lives/room/549779)  
-2022/08 Online training in Chinese: vedio recording on [KouShare](https://www.koushare.com/video/videodetail/31656)  
+The PAL stage is synchronized with the current AI-PAL implementation. It
+includes daily parallel picking, optional separate association, pre-QC STA/LTA
+trigger inventories, current S picking, AWS waveform access, and resumable AWS
+jobs. See [`1_run_pal/README.md`](1_run_pal/README.md).
 
-## Installation  
+`PALM/1_run_pal` and `AI-PAL/1_run_pal` use the same PAL implementation and
+produce the same scientific output contract for identical inputs and settings:
+daily accepted-pick files, STA/LTA trigger-count sidecars, subnet and merged
+catalog/phase files, association-rate tables, and completion metadata. Their
+installation roots, logs, job metadata, and configured output locations may
+differ, so whole output trees are not expected to be byte-for-byte identical.
 
-PALM is a set of codes. All you need is to setup proper Python environment. This can be accomplished easily by installing [Anaconda](https://www.anaconda.com/products/individual#Downloads) and [Obspy](https://github.com/obspy/obspy/wiki/Installation-via-Anaconda) sequentially.  
+For a local example:
 
-## References
+```bash
+cd 1_run_pal/run_pal_local
+python 1_run_pal_pick_assoc_eg.py
+```
 
-- Ding, H., **Y. Zhou**<sup>`*`</sup>, Z. Ge<sup>`*`</sup>, T. Taymaz, A. Ghosh, ... & X. Song<sup>`*`</sup> (2023). High-Resolution Seismicity Imaging and Early Aftershocks Migration of the 2023 Kahramanmaraş (SE Türkiye) M<sub>w</sub> 7.9 & 7.8 Earthquake Doublet. *Earthquake Science*; doi: [10.1016/j.eqs.2023.06.002](https://doi.org/10.1016/j.eqs.2023.06.002)  
+The split workflow runs the same scientific implementation:
 
-- **Zhou, Y.**<sup>`*`</sup>, C. Ren, A. Ghosh, H. Meng, L. Fang<sup>`*`</sup>, H. Yue, et al. (2022). Seismological Characterization of the 2021 Yangbi Foreshock-Mainshock Sequence, Yunnan, China: More than a Triggered Cascade. *Journal of Geophysical Research: Solid Earth*; 127(8). doi: [10.1029/2022JB024534](https://doi.org/10.1029/2022JB024534)  
+```bash
+python 2.1_run_pal_pick_eg.py
+python 2.2_run_pal_assoc_eg.py
+```
 
-- **Zhou, Y.**<sup>`*`</sup>, H. Yue<sup>`*`</sup>, S. Zhou, L. Fang, Y. Zhou, L. Xu, et al. (2022). Microseismicity along Xiaojiang Fault Zone (Southeastern Tibetan Plateau) and the Characterization of Interseismic Fault Behavior. *Tectonophysics*; 833: 229364. doi: [10.1016/j.tecto.2022.229364](https://doi.org/10.1016/j.tecto.2022.229364)  
+## 2. AI-PAL-Enriched Template Workflow
 
-- **Zhou, Y.**, A. Ghosh, L. Fang<sup>`*`</sup>, H. Yue<sup>`*`</sup>, S. Zhou, & Y. Su (2021). A High-Resolution Seismic Catalog for the 2021 M<sub>S</sub>6.4/M<sub>w</sub>6.1 YangBi Earthquake Sequence, Yunnan, China: Application of AI picker and Matched Filter. *Earthquake Science*; 34(5): 390-398. doi: [10.29382/eqs-2021-0031](https://doi.org/10.29382/eqs-2021-0031)  
+A common self-supervised workflow is:
 
-- **Zhou, Y.**, H. Yue, L. Fang, S. Zhou<sup>`*`</sup>, L. Zhao, & A. Ghosh (2021). An Earthquake Detection and Location Architecture for Continuous Seismograms: Phase Picking, Association, Location, and Matched Filter (PALM). *Seismological Research Letters*; 93(1): 413–425. doi: [10.1785/0220210111](https://doi.org/10.1785/0220210111)  
+1. Run PAL to obtain conservative phase detections and association rates.
+2. Use those PAL products to cut training samples and train AI-PAL pickers.
+3. Run the trained AI-PAL models on the continuous archive and associate,
+   optionally repick/reassociate, and locate the enhanced detections.
+4. Use the located AI-PAL events as the MFT templates.
+
+This lets PAL provide the initial training supervision while the broader
+AI-PAL catalog supplies a larger template bank for MFT. A direct PAL-to-MFT
+path remains useful as a conservative baseline or when no trained AI-PAL model
+is available. In `2_run_mft/1_select_templates_<case>.py`, set
+`TEMPLATE_SOURCE = "ai-pal"` or `"pal"` and provide the matching detection and
+located phase files in `TEMPLATE_INPUTS`.
+
+The detection and located files must describe the same source catalog. The
+selector uses the located event IDs to recover names from the corresponding
+detection file; mixing a PAL detection file with an AI-PAL location file (or
+the reverse) is invalid.
+
+## 3. Matched Filter
+
+The MFT stage performs conventional multi-station matched-filter detection,
+followed by cross-correlation P- and S-pick refinement. Its input is a located
+PAL phase file and the corresponding continuous waveforms.
+
+```bash
+cd 2_run_mft
+python 1_select_templates_eg.py
+python 2_cut_templates_eg.py
+python 3.1_run_mft_gpu_eg.py
+# or: python 3.2_run_mft_cpu_eg.py
+```
+
+Edit the user-settings block in each numbered launcher and the model parameters
+in `config_<CASE_CODE>.py`. Launchers select that config without copying it into
+`MFT_src/`, so multiple case workdirs can safely share one installed source.
+See [`2_run_mft/README.md`](2_run_mft/README.md).
+
+## 4. Location
+
+`3_location/hypodd/` converts template and MFT detections into differential-time
+inputs and runs hypoDD. Its external executable path and case inputs remain user
+settings because hypoDD is installed separately.
+
+## Historical Version
+
+The pasted PALM 4.x layout is retained in `References/legacy/`, with its MFT
+terminology normalized consistently with the active project. It is reference
+material only; new runs should use the numbered workflows and shared source
+directories above.
+
+## Dependencies
+
+The local PAL and MFT workflows require Python, NumPy, SciPy, ObsPy, and PyTorch.
+GPU MFT additionally requires a CUDA-compatible PyTorch installation. External
+location workflows require their corresponding hypoInverse or hypoDD binaries.
+
+## Reference
+
+Zhou, Y., Yue, H., Fang, L., Zhou, S., Zhao, L., and Ghosh, A. (2021). An
+Earthquake Detection and Location Architecture for Continuous Seismograms:
+Phase Picking, Association, Location, and Matched Filter (PALM).
+*Seismological Research Letters*, 93(1), 413-425.
