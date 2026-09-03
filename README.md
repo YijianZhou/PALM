@@ -125,7 +125,3 @@ location workflows require their corresponding hypoInverse or hypoDD binaries.
   Phase Picking, Association, Location, and Matched Filter (PALM).
   *Seismological Research Letters*, 93(1), 413-425.
   [doi:10.1785/0220210111](https://doi.org/10.1785/0220210111)
-- **Zhou, Y.**, H. Yue, Q. Kong, and S. Zhou (2019). Hybrid Event Detection and
-  Phase-Picking Algorithm Using Convolutional and Recurrent Neural Networks.
-  *Seismological Research Letters*, 90(3), 1079-1087.
-  [doi:10.1785/0220180319](https://doi.org/10.1785/0220180319)
