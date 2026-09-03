@@ -4,6 +4,11 @@ Phase Picking, Association, Location, and Matched Filter workflow for building
 high-resolution earthquake catalogs. PAL or AI-PAL detections can provide the
 event templates used by the matched-filter (MFT) stage.
 
+PALM v5.0 reorganizes the package into numbered executable workflows and shared
+PAL and MFT source packages. It adds compact dual-rate NPY template storage,
+buffered daily MFT scanning, high-resolution phase refinement, and final MFT
+association products ready for hypoDD relocation.
+
 ![PALM workflow](References/PALM_workflow.jpg)
 
 ## Project Layout
@@ -15,7 +20,7 @@ PALM/
 |-- 3_location/      Relocation tools for matched-filter detections
 |-- PAL_src/         Shared current PAL implementation
 |-- MFT_src/         Shared CPU/GPU MFT matched-filter implementation
-`-- References/      Documentation and archived historical PALM source
+`-- References/      Documentation files
 ```
 
 Executable directories contain case settings, input metadata, and numbered
@@ -93,16 +98,11 @@ See [`2_run_mft/README.md`](2_run_mft/README.md).
 
 ## 4. Location
 
-`3_location/hypodd/` converts template and MFT detections into differential-time
-inputs and runs hypoDD. Its external executable path and case inputs remain user
-settings because hypoDD is installed separately.
-
-## Historical Version
-
-The pasted PALM 4.x layout is retained in `References/legacy/`, with its MFT
-terminology normalized consistently with the active project. It is reference
-material only; new runs should use the numbered workflows and shared source
-directories above.
+The MFT stage associates duplicate template detections and writes `catalog.csv`,
+`phase.csv`, `event.dat`, and `dt.cc`. `3_location/hypodd/` consumes the latter
+two files and runs hypoDD relocation. Its external executable path and
+case-specific location settings remain user configuration because hypoDD is
+installed separately.
 
 ## Dependencies
 
@@ -110,9 +110,22 @@ The local PAL and MFT workflows require Python, NumPy, SciPy, ObsPy, and PyTorch
 GPU MFT additionally requires a CUDA-compatible PyTorch installation. External
 location workflows require their corresponding hypoInverse or hypoDD binaries.
 
-## Reference
+## References
 
-Zhou, Y., Yue, H., Fang, L., Zhou, S., Zhao, L., and Ghosh, A. (2021). An
-Earthquake Detection and Location Architecture for Continuous Seismograms:
-Phase Picking, Association, Location, and Matched Filter (PALM).
-*Seismological Research Letters*, 93(1), 413-425.
+- **Zhou, Y.**, H. Ding, A. Ghosh, and Z. Ge (2025). AI-PAL:
+  Self-Supervised AI Phase Picking via Rule-Based Algorithm for Generalized
+  Earthquake Detection. *Journal of Geophysical Research: Solid Earth*.
+  [doi:10.1029/2025JB031294](https://doi.org/10.1029/2025JB031294)
+- **Zhou, Y.**, A. Ghosh, L. Fang, H. Yue, S. Zhou, and Y. Su (2021). A
+  High-Resolution Seismic Catalog for the 2021 MS 6.4/Mw 6.1 Yangbi Earthquake
+  Sequence, Yunnan, China. *Earthquake Science*, 34(5), 390-398.
+  [doi:10.29382/eqs-2021-0031](https://doi.org/10.29382/eqs-2021-0031)
+- **Zhou, Y.**, H. Yue, L. Fang, S. Zhou, L. Zhao, and A. Ghosh (2021). An
+  Earthquake Detection and Location Architecture for Continuous Seismograms:
+  Phase Picking, Association, Location, and Matched Filter (PALM).
+  *Seismological Research Letters*, 93(1), 413-425.
+  [doi:10.1785/0220210111](https://doi.org/10.1785/0220210111)
+- **Zhou, Y.**, H. Yue, Q. Kong, and S. Zhou (2019). Hybrid Event Detection and
+  Phase-Picking Algorithm Using Convolutional and Recurrent Neural Networks.
+  *Seismological Research Letters*, 90(3), 1079-1087.
+  [doi:10.1785/0220180319](https://doi.org/10.1785/0220180319)
