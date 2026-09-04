@@ -38,7 +38,7 @@ class Config(object):
     self.taper_max_length_sec = 5.0 # taper cap at each buffered outer edge
     self.samp_rate = 50              # MFT detection rate; GPU data use this rate
     self.phase_samp_rate = 100       # P/S CC picking and amplitude rate; kept on CPU
-    self.freq_band = [1.,20.]
+    self.freq_band = [1.,16.]
     self.num_workers = 10
     self.get_data_dict = dp.get_data_dict
     self.get_sta_dict = dp.get_sta_dict

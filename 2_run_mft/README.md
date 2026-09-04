@@ -68,9 +68,19 @@ installed PALM package when the executable directory is copied elsewhere.
    station-day groups are reused unless
    `OVERWRITE_TEMPLATES = True`.
 
+   Template cutting reads only the smallest station-day span containing the
+   requested windows, plus `template_preprocess_padding_sec` at each end. The
+   local waveform archive is expected to have been cleaned and merged by the
+   `preprocess/` workflow. MFT does not repair fragmented daily files or fill
+   gaps. When a padded span crosses midnight, it strictly stitches the already
+   published adjacent daily traces and rejects any gap or conflicting overlap.
+
    Use an empty `OUTPUT_ROOT` for the first NPY-shard run. Template directories
    produced by the former SAC cutter are not read by the new MFT workflow and
    can be archived or removed after the NPY store passes an MFT startup test.
+   Compact stores created before the v4 polyphase/processing-metadata update
+   must also be recut; startup validation rejects them rather than mixing
+   differently filtered templates and continuous data.
 
 3. Run one matched-filter implementation:
 
@@ -134,11 +144,19 @@ The continuous waveform is prepared at `phase_samp_rate` once, retained in CPU
 memory for P/S cross-correlation, differential-time measurement, and amplitude
 measurement, and downsampled to `samp_rate` for the full-day matched-filter
 scan. The GPU launcher transfers only detection-rate data and normalization
-arrays to GPU memory. Thus the expensive scan stays at 50 Hz while `dt_p` and
-`dt_s` retain 0.01-second sampling at the default 100 Hz phase rate. Input
-waveforms must have a native rate at least as high as `phase_samp_rate`; a
+arrays to GPU memory, then releases their CPU copies; only the high-rate phase
+array remains in host memory for that station-day. Thus the expensive scan
+stays at 50 Hz while `dt_p` and `dt_s` retain 0.01-second sampling at the
+default 100 Hz phase rate. Input waveforms must have a native rate at least as
+high as `phase_samp_rate`; higher rates are converted adaptively and a
 lower-rate station is skipped rather than upsampled and presented as a
 high-resolution phase measurement.
+
+All rate conversion uses zero-phase polyphase FIR resampling. The configured
+1-16 Hz bandpass is applied to the high-rate phase stream before its 50 Hz
+detection copy is produced, and the polyphase low-pass provides the explicit
+anti-alias stage for downsampling. Template and continuous waveforms use this
+same operation order.
 
 After a 50 Hz event detection, phase picking also correlates the complete
 detection window at `phase_samp_rate` against the retained high-rate continuous
