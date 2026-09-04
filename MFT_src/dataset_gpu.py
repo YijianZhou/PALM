@@ -1,11 +1,14 @@
 """ Data i/o interface for MFT (GPU ver)
 """
 import time
+from fractions import Fraction
+
 import torch
 from torch.utils.data import Dataset, DataLoader
 import obspy
 from obspy import read
 import numpy as np
+from scipy.signal import resample_poly
 import config
 from template_store import TemplateDataset, read_ftemp
 
@@ -58,13 +61,19 @@ def read_data(date, data_dir, sta_dict, buffer_seconds=0.0):
     todel = []
     for (net_sta, data_i) in data_loader:
         if len(data_i)==0: todel.append(net_sta); continue
-        detection_data_cuda = cpu2cuda(data_i[0])
-        detection_norm_cuda = cpu2cuda(data_i[1])
         phase_data_cpu = data_i[2]
+        detection_data_cpu = data_i[0]
+        detection_norm_cpu = data_i[1]
+        detection_data_cuda = detection_data_cpu.float().cuda(
+            non_blocking=False
+        )
+        detection_norm_cuda = detection_norm_cpu.float().cuda(
+            non_blocking=False
+        )
         data_dict[net_sta] = [
             phase_data_cpu, detection_data_cuda, detection_norm_cuda
         ]
-        del data_i
+        del detection_data_cpu, detection_norm_cpu, data_i
         print('read {} | time {:.1f}s'.format(net_sta, time.time()-t))
     for net_sta in todel: data_dict.pop(net_sta)
     return data_dict
@@ -96,7 +105,7 @@ def read_temp(temp_pha, temp_root):
     todel = []
     temp_dataset = TemplateDataset(
         temp_list, temp_root, max_sta, samp_rate, phase_samp_rate,
-        temp_win_det, temp_win_p, temp_win_s,
+        temp_win_det, temp_win_p, temp_win_s, freq_band,
     )
     temp_loader = DataLoader(temp_dataset, num_workers=num_workers, batch_size=None, pin_memory=True)
     for i, [temp_name, temp_loc, temp_pick_dict] in enumerate(temp_loader):
@@ -131,6 +140,7 @@ class Data(Dataset):
     phase_stream = trim_stream(
         phase_stream, self.start_time, self.end_time
     )
+    if len(phase_stream) != 3: return net_sta, []
     detection_stream = resample_stream(phase_stream, samp_rate)
     duration = self.end_time - self.start_time
     phase_npts = int(round(duration * phase_samp_rate))
@@ -172,11 +182,7 @@ def preprocess(stream, target_sample_rate=None):
     if minimum_rate < target_sample_rate * (1.0 - 1e-6):
         print('data rate is below requested {} Hz'.format(target_sample_rate))
         return []
-    if any(
-        not np.isclose(trace.stats.sampling_rate, target_sample_rate)
-        for trace in st
-    ):
-        st.resample(target_sample_rate)
+    st = resample_stream(st, target_sample_rate)
     for ii in range(3):
         st[ii].data[np.isnan(st[ii].data)] = 0
         st[ii].data[np.isinf(st[ii].data)] = 0
@@ -193,12 +199,22 @@ def preprocess(stream, target_sample_rate=None):
 
 def resample_stream(stream, target_sample_rate):
     st = stream.copy()
-    if any(
-        not np.isclose(trace.stats.sampling_rate, target_sample_rate)
-        for trace in st
-    ):
-        st.resample(target_sample_rate)
     for trace in st:
+        source_rate = float(trace.stats.sampling_rate)
+        if not np.isclose(source_rate, target_sample_rate):
+            ratio = Fraction(float(target_sample_rate) / source_rate).limit_denominator(10000)
+            effective_rate = source_rate * ratio.numerator / ratio.denominator
+            if not np.isclose(effective_rate, target_sample_rate, rtol=1e-8):
+                raise ValueError(
+                    'cannot represent sample-rate conversion {} -> {}'.format(
+                        source_rate, target_sample_rate
+                    )
+                )
+            trace.data = resample_poly(
+                np.asarray(trace.data), ratio.numerator, ratio.denominator,
+                padtype='line',
+            )
+            trace.stats.sampling_rate = float(target_sample_rate)
         trace.data[~np.isfinite(trace.data)] = 0
     return st
 
@@ -214,18 +230,28 @@ def normalize_stream_channels(stream):
 
 
 def read_stream(st_paths, gain=None, start_time=None, end_time=None):
-    # read data
+    # Daily files are already cleaned. Only stitch adjacent published days.
     read_kwargs = {}
     if start_time is not None: read_kwargs['starttime'] = start_time
     if end_time is not None: read_kwargs['endtime'] = end_time
     try:
         unique_paths = list(dict.fromkeys(st_paths))
-        st = read(unique_paths[0], **read_kwargs)
-        for path in unique_paths[1:]:
-            st += read(path, **read_kwargs)
-        st.merge(fill_value=0)
-    except:
-        print('bad data'); return []
+        st = obspy.Stream()
+        for path in unique_paths:
+            daily = read(path, **read_kwargs)
+            if len(daily) != 1:
+                raise ValueError('expected one cleaned trace in {}'.format(path))
+            st += daily
+        if len(st) > 3:
+            st.merge(method=0, fill_value=None)
+        if any(
+            np.ma.isMaskedArray(trace.data)
+            and np.any(np.ma.getmaskarray(trace.data))
+            for trace in st
+        ):
+            raise ValueError('gap or conflicting overlap across daily files')
+    except Exception as exc:
+        print('bad archived data: {}'.format(exc)); return []
     if len(st) != 3:
         st = normalize_stream_channels(st)
     if not gain: return st
@@ -247,6 +273,13 @@ def read_stream(st_paths, gain=None, start_time=None, end_time=None):
     return st
 
 def trim_stream(stream, start_time, end_time):
+    tolerance = 0.5 / min(trace.stats.sampling_rate for trace in stream)
+    if any(
+        trace.stats.starttime > start_time + tolerance
+        or trace.stats.endtime < end_time - tolerance
+        for trace in stream
+    ):
+        return []
     return stream.copy().trim(start_time, end_time, pad=True, fill_value=0.)
 
 def cpu2cuda(data):

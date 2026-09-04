@@ -10,7 +10,8 @@ from torch.utils.data import Dataset
 
 
 FORMAT_NAME = "palm-mft-template-npy"
-FORMAT_VERSION = 3
+FORMAT_VERSION = 4
+RESAMPLING_METHOD = "polyphase-fir-line-pad"
 INDEX_NAME = "template_index.npy"
 MANIFEST_NAME = "template_manifest.json"
 
@@ -63,7 +64,7 @@ def _open_shard(path):
 class TemplateStore:
   def __init__(
       self, root, detection_rate, phase_rate, detection_window,
-      p_window, s_window,
+      p_window, s_window, frequency_band,
   ):
     self.root = Path(root).expanduser().resolve()
     manifest_path = self.root / MANIFEST_NAME
@@ -96,6 +97,23 @@ class TemplateStore:
           "template phase rate {} does not match config {}".format(
               stored_phase_rate, phase_rate
           )
+      )
+    stored_frequency_band = [
+        float(value) for value in self.manifest["frequency_band_hz"]
+    ]
+    if (
+        len(stored_frequency_band) != 2
+        or not np.allclose(stored_frequency_band, frequency_band)
+    ):
+      raise ValueError(
+          "template frequency band {} does not match config {}".format(
+              stored_frequency_band, list(frequency_band)
+          )
+      )
+    if self.manifest.get("resampling_method") != RESAMPLING_METHOD:
+      raise ValueError(
+          "template resampling method does not match the current workflow; "
+          "recut templates"
       )
     configured_windows = {
         "detection_window_sec": detection_window,
@@ -187,7 +205,7 @@ class TemplateDataset(Dataset):
 
   def __init__(
       self, template_list, template_root, max_stations, detection_rate,
-      phase_rate, detection_window, p_window, s_window,
+      phase_rate, detection_window, p_window, s_window, frequency_band,
   ):
     self.template_list = template_list
     self.max_stations = int(max_stations)
@@ -200,7 +218,7 @@ class TemplateDataset(Dataset):
     ]
     self.store = TemplateStore(
         template_root, self.detection_rate, self.phase_rate,
-        *self.windows,
+        *self.windows, frequency_band,
     )
 
   def __getitem__(self, index):

@@ -23,6 +23,14 @@ placed on the GPU. `samp_rate` configures detection and
 The high-rate detection window is correlated on CPU over `pick_win_p`; its
 three-component maximum is written as `cc_det_phase` on each phase row.
 
+Native rates at or above `phase_samp_rate` are handled adaptively with
+zero-phase polyphase FIR resampling; lower-rate inputs are rejected. The
+configured high-rate bandpass defaults to 1-16 Hz, after which the same
+polyphase path creates the 50 Hz detection representation. Local inputs must
+already satisfy the cleaned daily archive contract from `preprocess/`.
+Single-day files are not merged or repaired here; adjacent clean days are
+strictly stitched only when a padded or buffered read crosses midnight.
+
 `associate_mft.py` is the final shared stage used by both numbered MFT
 launchers. It associates duplicate detections across all launcher segments and
 writes `catalog.csv`, `phase.csv`, `event.dat`, and `dt.cc`. Association belongs
