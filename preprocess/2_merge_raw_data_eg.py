@@ -29,19 +29,10 @@ STATION_FILE = Path("output/station_%s.csv" % CASE_CODE)
 RAW_ROOT = Path("/data/ai_pal_%s_raw" % CASE_CODE)
 CLEAN_ROOT = Path("/data/ai_pal_%s_daily" % CASE_CODE)
 TIME_RANGE = "20190704-20190707"  # Exclusive end date.
-LOCATION_PRIORITY = ("", "00", "10", "20", "01", "02")
 MAX_MSEED_SEGMENTS_PER_COMPONENT = 5000
 MAX_MSEED_SAMPLE_COVERAGE_RATIO = 1.10
 NUM_WORKERS = 4
 OVERWRITE = False
-
-
-def location_rank(location, selected_locations):
-    if location in selected_locations:
-        return selected_locations.index(location)
-    if location in LOCATION_PRIORITY:
-        return len(selected_locations) + LOCATION_PRIORITY.index(location)
-    return len(selected_locations) + len(LOCATION_PRIORITY)
 
 
 def channel_rank(channel):
@@ -92,18 +83,30 @@ def validate_fragments(stream, target_rate, source):
 
 
 def active_selectors(station_epochs, day):
-    selectors = defaultdict(list)
+    selectors = {}
+    station_choices = {}
     for epoch in active_epochs(station_epochs, day, day + 86400):
         key = epoch["net"], epoch["sta"], epoch["band"]
         location = normalized_location(epoch["location"])
-        if location not in selectors[key]:
-            selectors[key].append(location)
+        net_sta = key[:2]
+        choice = key[2], location
+        if net_sta in station_choices and station_choices[net_sta] != choice:
+            raise ValueError(
+                "multiple location-band selectors for {}.{} on {}; "
+                "run 1.2_reconcile_station_file_eg.py first".format(
+                    key[0], key[1], compact_date(day)
+                )
+            )
+        station_choices[net_sta] = choice
+        selectors[key] = location
     return selectors
 
 
 def index_raw_day(day_dir, selectors):
     """Index files by selected station, band, component, location, and channel."""
-    indexed = defaultdict(lambda: defaultdict(lambda: defaultdict(set)))
+    indexed = defaultdict(
+        lambda: defaultdict(lambda: defaultdict(lambda: defaultdict(int)))
+    )
     errors = []
     for path in sorted(day_dir.glob("*.mseed")):
         try:
@@ -114,21 +117,31 @@ def index_raw_day(day_dir, selectors):
         for trace in stream:
             net, sta = trace.stats.network, trace.stats.station
             channel = trace.stats.channel
+            location = normalized_location(trace.stats.location)
             matching_bands = [
-                band for key_net, key_sta, band in selectors
-                if key_net == net and key_sta == sta and channel.startswith(band)
+                band for (key_net, key_sta, band), selected_location
+                in selectors.items()
+                if key_net == net and key_sta == sta
+                and channel.startswith(band)
+                and location == selected_location
             ]
             for band in matching_bands:
                 component = component_code(channel)
                 if component not in {"E", "N", "Z"}:
                     continue
                 key = net, sta, band, component
-                location = normalized_location(trace.stats.location)
-                indexed[key][location][channel].add(path)
+                indexed[key][location][channel][path] += 1
     return indexed, errors
 
 
 def read_candidate(paths, net, sta, location, channel, day):
+    header_segment_count = sum(paths.values())
+    if header_segment_count > MAX_MSEED_SEGMENTS_PER_COMPONENT:
+        raise ValueError(
+            "{} header segments exceeds limit {}".format(
+                header_segment_count, MAX_MSEED_SEGMENTS_PER_COMPONENT
+            )
+        )
     stream = Stream()
     for path in sorted(paths):
         loaded = read(str(path), starttime=day, endtime=day + 86400)
@@ -156,52 +169,48 @@ def read_candidate(paths, net, sta, location, channel, day):
     return trace, target_rate, coverage_ratio, len(paths), segment_count
 
 
-def clean_component(day, output_dir, key, candidates, selected_locations):
+def clean_component(day, output_dir, key, candidates, selected_location):
     net, sta, band, component = key
     failures = []
-    ordered_locations = sorted(
-        candidates, key=lambda value: location_rank(value, selected_locations)
-    )
-    for location in ordered_locations:
-        channels = sorted(candidates[location], key=channel_rank)
-        for channel in channels:
-            paths = candidates[location][channel]
-            try:
-                trace, rate, ratio, raw_files, segment_count = read_candidate(
-                    paths, net, sta, location, channel, day
-                )
-                canonical_channel = band + component
-                trace.stats.channel = canonical_channel
-                location_name = location if location else "--"
-                output = output_dir / "{}.{}.{}.{}.mseed".format(
-                    net, sta, location_name, canonical_channel
-                )
-                if output.exists() and not OVERWRITE:
-                    status = "existing"
-                else:
-                    partial = output.with_suffix(output.suffix + ".partial")
-                    Stream(traces=[trace]).write(str(partial), format="MSEED")
-                    os.replace(partial, output)
-                    status = "written"
-                return {
-                    "date": compact_date(day),
-                    "net_sta": "{}.{}".format(net, sta),
-                    "band": band,
-                    "component": component,
-                    "location": location_name,
-                    "source_channel": channel,
-                    "status": status,
-                    "raw_files": raw_files,
-                    "segments": segment_count,
-                    "coverage_ratio": "{:.4f}".format(ratio),
-                    "sampling_rate": "{:.6g}".format(rate),
-                    "output": str(output),
-                    "error": " | ".join(failures),
-                }
-            except Exception as exc:
-                failures.append("{} {}: {}".format(
-                    location if location else "--", channel, exc
-                ))
+    channels = sorted(candidates.get(selected_location, {}), key=channel_rank)
+    for channel in channels:
+        paths = candidates[selected_location][channel]
+        try:
+            trace, rate, ratio, raw_files, segment_count = read_candidate(
+                paths, net, sta, selected_location, channel, day
+            )
+            canonical_channel = band + component
+            trace.stats.channel = canonical_channel
+            location_name = selected_location if selected_location else "--"
+            output = output_dir / "{}.{}.{}.{}.mseed".format(
+                net, sta, location_name, canonical_channel
+            )
+            if output.exists() and not OVERWRITE:
+                status = "existing"
+            else:
+                partial = output.with_suffix(output.suffix + ".partial")
+                Stream(traces=[trace]).write(str(partial), format="MSEED")
+                os.replace(partial, output)
+                status = "written"
+            return {
+                "date": compact_date(day),
+                "net_sta": "{}.{}".format(net, sta),
+                "band": band,
+                "component": component,
+                "location": location_name,
+                "source_channel": channel,
+                "status": status,
+                "raw_files": raw_files,
+                "segments": segment_count,
+                "coverage_ratio": "{:.4f}".format(ratio),
+                "sampling_rate": "{:.6g}".format(rate),
+                "output": str(output),
+                "error": " | ".join(failures),
+            }
+        except Exception as exc:
+            failures.append("{} {}: {}".format(
+                selected_location if selected_location else "--", channel, exc
+            ))
     return {
         "date": compact_date(day),
         "net_sta": "{}.{}".format(net, sta),
@@ -240,6 +249,33 @@ def missing_component_row(day, key):
     }
 
 
+def unsupported_component_row(day, selector, components, indexed):
+    net, sta, band = selector
+    candidates = [
+        values for key, values in indexed.items() if key[:3] == selector
+    ]
+    return {
+        "date": compact_date(day),
+        "net_sta": "{}.{}".format(net, sta),
+        "band": band,
+        "component": ",".join(sorted(components)),
+        "location": "",
+        "source_channel": "",
+        "status": "rejected_station",
+        "raw_files": sum(
+            len(paths)
+            for values in candidates
+            for channels in values.values()
+            for paths in channels.values()
+        ),
+        "segments": "",
+        "coverage_ratio": "",
+        "sampling_rate": "",
+        "output": "",
+        "error": "expected one component or a complete E/N/Z set",
+    }
+
+
 REPORT_FIELDS = (
     "date", "net_sta", "band", "component", "location", "source_channel",
     "status", "raw_files", "segments", "coverage_ratio", "sampling_rate",
@@ -270,13 +306,24 @@ def main():
         output_dir.mkdir(parents=True, exist_ok=True)
         selectors = active_selectors(station_epochs, day)
         indexed, header_errors = index_raw_day(raw_dir, selectors)
-        expected_keys = {
-            (net, sta, band, component)
-            for net, sta, band in selectors
-            for component in ("E", "N", "Z")
-        }
-        for key in sorted(expected_keys - set(indexed)):
-            report_rows.append(missing_component_row(day, key))
+        processable = {}
+        for selector in sorted(selectors):
+            station_items = {
+                key: candidates for key, candidates in indexed.items()
+                if key[:3] == selector
+            }
+            components = {key[3] for key in station_items}
+            if len(components) in (1, 3):
+                processable.update(station_items)
+            elif not components:
+                for component in ("E", "N", "Z"):
+                    report_rows.append(missing_component_row(
+                        day, selector + (component,)
+                    ))
+            else:
+                report_rows.append(unsupported_component_row(
+                    day, selector, components, indexed
+                ))
         for path, message in header_errors:
             report_rows.append({
                 "date": day_code, "net_sta": "", "band": "", "component": "",
@@ -284,13 +331,16 @@ def main():
                 "raw_files": 1, "segments": "", "coverage_ratio": "",
                 "sampling_rate": "", "output": "", "error": "{}: {}".format(path, message),
             })
-        print("{}: cleaning {} station-components".format(day_code, len(indexed)))
+        print("{}: cleaning {} station-components".format(
+            day_code, len(processable)
+        ))
         with ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
             futures = {
                 executor.submit(
-                    clean_component, day, output_dir, key, candidates, selectors[key[:3]]
+                    clean_component, day, output_dir, key, candidates,
+                    selectors[key[:3]],
                 ): key
-                for key, candidates in sorted(indexed.items())
+                for key, candidates in sorted(processable.items())
             }
             for future in as_completed(futures):
                 row = future.result()

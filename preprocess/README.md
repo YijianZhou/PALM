@@ -57,44 +57,67 @@ Edit and run `0.1_download_station_metadata_eg.py`. It downloads FDSN text
 metadata for each configured network into `input/`. Choose networks, geographic
 bounds, and the complete study interval before continuing.
 
-### 0.2 Select station and channel epochs
+### 0.2 Build the station file
 
-Edit and run `0.2_format_station_file_eg.py`. It filters channel families by
-priority, selects metadata overlapping the study bounds, and writes:
+Edit and run `0.2_format_station_file_eg.py`. It groups metadata by `NET.STA`
+and divides each station history at all location and channel epoch boundaries.
+For every interval it first selects the preferred active location from
+`loc_codes`, then selects the preferred active channel band from `chn_codes`.
+This allows borehole locations to take priority over surface locations without
+changing the final `NET.STA.BAND.LOC` selector.
 
-- `output/station_eg_raw.csv`: selected station epochs before temporal gap
-  normalization
-- `output/station_eg_metadata_audit.csv`: channel conflicts, missing component
-  gains, and duplicate components
+The script also normalizes gain epochs into one canonical station file.
+Internal gaps are divided at their temporal midpoint, while the first and last
+epochs are extended when necessary to cover `t_min` through `t_max`. It writes:
+
+- `output/station_eg.csv`: canonical station and gain epochs
+- `output/station_eg_metadata_audit.csv`: location and channel choices, missing
+  component gains, and duplicate components
+- `output/station_eg_gain_interval_audit.csv`: every extended boundary and
+  filled internal gap
 
 When only one or two component gains exist, the formatter fills the absent gain
-with an available component gain and records that choice in the audit. Review
-all audit rows before a production run.
+with an available component gain and records that choice in the metadata audit.
+Review both audit files before waveform download.
+Fullfed inputs are named `input/station_<network>.fullfed` and may be reused
+by multiple cases.
 
-### 0.3 Normalize gain intervals
+### 1.1 Download raw daily waveforms
 
-Edit and run `0.3_normalize_station_gain_intervals_eg.py`. It fills every
-internal metadata gap at the temporal midpoint between adjacent gain epochs.
-`STUDY_START` and `STUDY_END` optionally extend the first and last epochs to
-cover the complete study interval. Static one-gain and three-gain rows pass
-through unchanged.
-
-This step writes the canonical `output/station_eg.csv` consumed by all later
-scripts and records every adjustment in
-`output/station_eg_gain_interval_audit.csv`. Review that audit before waveform
-download.
-
-### 1 Download raw daily waveforms
-
-Edit and run `1_download_continuous_data_eg.py`. For every station epoch and UTC
-day, it requests the selected band from the configured FDSN providers in order.
-Raw channel streams are retained separately under `RAW_ROOT/YYYYMMDD/`.
+Edit and run `1.1_download_continuous_data_eg.py`. It uses ObsPy
+`MassDownloader` and applies the same two-level priority as the station
+formatter: location first, then channel band. It searches for a complete E/N/Z
+combination first, then accepts a genuine single-component station when no
+complete combination exists. Two-component combinations are treated as
+incomplete data. Only one location-band combination is retained per `NET.STA`
+and day. `PROVIDERS` remains an ordered priority list,
+and `NUM_WORKERS` controls the concurrent download threads per provider.
+Raw channel streams are stored under `RAW_ROOT/YYYYMMDD/`, while downloaded
+StationXML is reused from `RAW_ROOT/_stationxml/`.
 
 The downloader is restartable. A day is skipped only when it has a
-`download_complete.json` marker. Failed selectors are recorded in the daily
-`download_report.csv` and leave an `download_incomplete.json` marker, allowing
-the day to be retried. Set `OVERWRITE = True` only when existing raw files must
-be replaced.
+`download_complete.json` marker. For an incomplete day, MassDownloader checks
+the existing miniSEED files and downloads missing data. Failed selectors are
+recorded in the daily `download_report.csv` and leave a
+`download_incomplete.json` marker. Set `OVERWRITE = True` only when existing
+raw files must be replaced.
+
+### 1.2 Reconcile downloaded data and station gains
+
+Run `1.2_reconcile_station_file_eg.py` after downloading. It checks that every
+retained `NET.STA` daily waveform combination has matching, continuous gain
+coverage in `output/station_eg.csv`. When the downloaded location or band
+differs from the metadata-preferred choice, the script reconstructs that day
+from the matching fullfed component gains and updates only the affected station
+interval. If the exact downloaded selector has no overlapping fullfed epoch,
+its nearest available fullfed gain epoch is used and identified in the audit.
+
+The original station file is preserved once as
+`output/station_eg_before_download_reconciliation.csv`. All checks, updates,
+unresolved metadata, incomplete components, and removed non-selected waveform
+files are recorded in `output/station_eg_download_reconciliation.csv`.
+`NUM_WORKERS` controls concurrent daily miniSEED-header scans; reduce it if the
+archive server becomes I/O saturated.
 
 ### 2 Validate and merge the raw data
 
@@ -102,14 +125,15 @@ Edit and run `2_merge_raw_data_eg.py`. This is the publication step. It applies
 the same structural safeguards used by the AWS PAL reader:
 
 1. Select only the requested network, station, location, band, and component.
-2. Prefer canonical `E/N/Z` channels over `1/2/3` alternatives.
+2. Accept either one component or a complete E/N/Z set, preferring lettered
+   orientations over `1/2/3` alternatives.
 3. Reject components with excessive miniSEED fragmentation.
 4. Reject streams whose summed sample coverage indicates severe duplication or
    overlap.
 5. Interpolate fragments to the sampling rate of the longest fragment.
 6. Merge the fragments, fill gaps with zero, and require exactly one trace.
 7. Trim to the exact UTC day and reject empty, NaN, or infinite output.
-8. Try lower-priority location/channel alternatives after a rejection.
+8. Enforce the single location-band selector reconciled for that station-day.
 
 Only accepted streams are written to `CLEAN_ROOT`. Missing components, rejected
 streams, unreadable files, selected fallbacks, and coverage ratios are recorded
@@ -121,17 +145,23 @@ not be applied twice.
 
 ### 3 Check continuity
 
-Run `3_check_data_continuity_eg.py` after merging. It compares the cleaned
-archive with station epochs and reports both any-component and complete
-three-component availability:
+Run `3_check_data_continuity_eg.py` after downloading or merging. Set
+`DATA_SOURCE` to `"raw"` or `"clean"`. Thick gray lines show operational
+intervals read directly from the network fullfed files; thin blue lines show
+the actual miniSEED trace intervals read from the selected archive.
+`NUM_WORKERS` controls concurrent daily miniSEED-header scans, and progress is
+reported every `PROGRESS_EVERY_DAYS` completed directories.
 
-- `output/data_continuity_eg.csv`
-- `output/data_continuity_low_eg.csv`
-- `output/data_continuity_read_errors_eg.csv`
-- `output/data_continuity_eg.png`
+- `output/data_continuity_eg_<source>.csv`
+- `output/data_continuity_eg_<source>_low.csv`
+- `output/data_continuity_eg_<source>_read_errors.csv`
+- `output/data_continuity_eg_<source>_observed_intervals.csv`
+- `output/data_continuity_eg_<source>.png`
 
-One- or two-component days can still be visible in the first ratio, while the
-three-component ratio identifies days that provide the preferred input.
+The summary reports duration-based study coverage and coverage within expected
+fullfed operation. Raw data reveals acquisition gaps; clean data describes the
+post-merge archive, where short gaps may already have been filled with zeros.
+Single-channel and three-component stations are both supported.
 
 ### 4 Plot station distribution
 
@@ -145,7 +175,7 @@ can be overlaid by setting `CATALOG_FILE` and its latitude/longitude columns.
 - Keep raw downloads until the merge report and continuity diagnostics pass.
 - Retain the cleaned daily archive for PAL/AI-PAL; raw downloads may then be
   removed according to the project's data-retention policy.
-- Start with modest `NUM_WORKERS` values. FDSN services may throttle aggressive
-  parallel requests, while local merging is usually limited by storage I/O.
+- Start with a modest `NUM_WORKERS` value. MassDownloader applies it to each
+  provider, and FDSN services may throttle aggressive parallel requests.
 - Rerunning a script with `OVERWRITE = False` preserves published files and is
   the normal recovery path after interruption.

@@ -5,7 +5,7 @@ Edit ``NETWORKS`` below, then run:
     python 0.1_download_station_metadata_eg.py
 
 For example, ``NETWORKS = ["CI"]`` creates
-``input/station_ci_eg.fullfed`` for the station formatter.
+``input/station_ci.fullfed`` for the station formatter.
 """
 import re
 from pathlib import Path
@@ -16,7 +16,6 @@ from urllib.request import Request, urlopen
 
 # -----------------------------------------------------------------------------
 # User parameter: enter one or more FDSN network codes.
-CASE_CODE = "eg"
 NETWORKS = ["CI"]
 
 # These defaults retrieve all channel epochs since 1900. Normally only
@@ -24,7 +23,7 @@ NETWORKS = ["CI"]
 START_TIME = "2019-07-01"
 END_TIME = "2019-08-01"
 OUTPUT_DIRECTORY = "input"
-OUTPUT_TEMPLATE = "station_{network}_%s.fullfed" % CASE_CODE
+OUTPUT_TEMPLATE = "station_{network}.fullfed"
 INCLUDE_OVERLAPS = True
 REQUEST_TIMEOUT_SECONDS = 300
 # -----------------------------------------------------------------------------

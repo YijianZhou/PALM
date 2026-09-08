@@ -1,9 +1,10 @@
 """Shared contracts for the example continuous-waveform preparation tools."""
 
 import csv
+from collections import defaultdict
 from pathlib import Path
 
-from obspy import UTCDateTime
+from obspy import UTCDateTime, read
 
 
 RUN_DIR = Path(__file__).resolve().parent
@@ -93,3 +94,83 @@ def component_code(channel):
     return {"1": "E", "2": "N", "3": "Z"}.get(
         channel[-1].upper(), channel[-1].upper()
     )
+
+
+def waveform_combinations(day_dir, expected_stations=None):
+    """Inventory available location-band combinations from miniSEED headers."""
+    day_dir = Path(day_dir)
+    expected = set(expected_stations) if expected_stations is not None else None
+    combinations = defaultdict(lambda: {"components": set(), "paths": set()})
+    read_errors = []
+    for path in sorted(day_dir.glob("*.mseed")):
+        try:
+            stream = read(str(path), headonly=True)
+        except Exception as exc:
+            read_errors.append("{}: {}".format(path.name, exc))
+            continue
+        for trace in stream:
+            net_sta = (str(trace.stats.network), str(trace.stats.station))
+            if expected is not None and net_sta not in expected:
+                continue
+            channel = str(trace.stats.channel)
+            component = component_code(channel)
+            if len(channel) < 2 or component not in ("E", "N", "Z"):
+                continue
+            key = (
+                net_sta[0], net_sta[1],
+                normalized_location(trace.stats.location), channel[:2],
+            )
+            combinations[key]["components"].add(component)
+            combinations[key]["paths"].add(path)
+    return dict(combinations), read_errors
+
+
+def priority_rank(value, priorities):
+    priorities = tuple(priorities)
+    if value in priorities:
+        return 0, priorities.index(value)
+    return 1, value
+
+
+def preferred_waveform_combinations(
+    combinations, location_priority, channel_priority
+):
+    """Select one three- or single-component combination per station."""
+    by_station = defaultdict(list)
+    for key, details in combinations.items():
+        by_station[key[:2]].append((key, details))
+
+    selected = {}
+    for net_sta, candidates in by_station.items():
+        ordered = sorted(candidates, key=lambda item: (
+            priority_rank(item[0][2], location_priority),
+            priority_rank(item[0][3], channel_priority),
+        ))
+        complete = [
+            item for item in ordered
+            if item[1]["components"] == {"E", "N", "Z"}
+        ]
+        single = [
+            item for item in ordered if len(item[1]["components"]) == 1
+        ]
+        selected[net_sta] = (
+            complete[0] if complete else single[0] if single else ordered[0]
+        )
+    return selected
+
+
+def prune_waveform_combinations(combinations, selected):
+    """Delete files belonging only to non-selected station combinations."""
+    selected_paths = set()
+    all_paths = set()
+    for key, details in combinations.items():
+        paths = set(details["paths"])
+        all_paths.update(paths)
+        chosen = selected.get(key[:2])
+        if chosen is not None and chosen[0] == key:
+            selected_paths.update(paths)
+    removed = []
+    for path in sorted(all_paths - selected_paths):
+        path.unlink()
+        removed.append(path)
+    return removed
