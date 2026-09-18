@@ -133,12 +133,15 @@ template pairs retained for relocation. `event.dat` depths include
 `hypodd_depth_offset_km`, and the relocation stage removes the same offset from
 the resulting depths.
 
-Each target UTC day reads `data_buffer_sec` of waveform context from both the
-previous and following day (default 30 seconds in `config_<CASE_CODE>.py`). The
-combined stream is preprocessed and searched as one interval, which preserves
-templates and phase-pick windows across midnight. Only detections whose origin
-time is in the target half-open interval `[day_start, next_day_start)` are
-written, so adjacent daily runs do not duplicate events.
+MFT processes days sequentially and stations within a day concurrently. For
+day `D`, it reads only day `D` and prepends the cached final
+`2 * data_buffer_sec` of unfiltered, gain-corrected day `D-1` data (default
+buffer: 30 seconds). The first day seeds this cache by reading only that short
+tail from the preceding file. The combined `[D-2b, D+1)` stream is preprocessed
+once, while detections are owned by the shifted half-open interval
+`[D-b, D+1-b)`. The final association uses the same shifted bounds. This keeps
+both owned boundaries away from preprocessing edges without repeatedly opening
+the following day or rereading the preceding day during a sequential run.
 
 The continuous waveform is prepared at `phase_samp_rate` once, retained in CPU
 memory for P/S cross-correlation, differential-time measurement, and amplitude
@@ -172,9 +175,9 @@ net_sta,tp,ts,dt_p,dt_s,s_amp,cc_p,cc_s,cc_det_phase
 alter the event detection threshold.
 
 `taper_max_length_sec` explicitly controls the preprocessing taper at each
-outer edge of that buffered stream. Its default is 5 seconds, matching the
-previous MFT behavior. With the default 30-second buffer, the target day begins
-and ends 25 seconds inside the untapered portion of the search stream.
+outer edge of the rolling stream. Its default is 5 seconds. With the default
+30-second buffer, each owned boundary is 30 seconds inside a preprocessing
+edge.
 
 ## Source Isolation
 

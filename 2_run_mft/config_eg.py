@@ -34,7 +34,7 @@ class Config(object):
     self.association_start_event_id = 1000000
     self.hypodd_depth_offset_km = 5.0  # keep initial depths below surface
     # data process
-    self.data_buffer_sec = 30.0     # adjacent-day context on each side
+    self.data_buffer_sec = 30.0     # rolling raw-tail context and time shift
     self.taper_max_length_sec = 5.0 # taper cap at each buffered outer edge
     self.samp_rate = 50              # MFT detection rate; GPU data use this rate
     self.phase_samp_rate = 100       # P/S CC picking and amplitude rate; kept on CPU
