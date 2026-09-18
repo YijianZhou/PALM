@@ -20,14 +20,14 @@ class Config(object):
     self.det_gap    = 5.             # time gap between detections
     self.to_prep    = False          # local archive is prepared by preprocess/
     self.to_filter  = True           # apply freq_band before PAL picking
-    self.location_priority = ["10", "20", "01", "02", "00", ""]
-    self.channel_priority = ["HH", "BH", "EH", "HN", "EN", "SH"]
     self.freq_band  = [1,20]         # frequency band
     self.data_buffer_sec = 60.0      # rolling unfiltered edge context
     self.station_log_interval = 50
     self.picker_verbose = False
     self.taper_max_length_sec = 10.0
     self.normalize_to_three_channels = True  # cycle/truncate available channels into E/N/Z
+    self.location_priority = ["10", "20", "01", "02", "00", ""]
+    self.channel_priority = ["HH", "BH", "EH", "HN", "EN", "SH"]
     self.picker_vp   = 5.9
     self.picker_vs   = 3.45
     # 2. associator params
@@ -38,6 +38,8 @@ class Config(object):
             "max_res": 1.2,
             "max_drop": 1,
             "xy_margin": 0.1,
+            "lat_range": None,
+            "lon_range": None,
             "xy_grid": 0.02,
             "z_grids": np.arange(2, 25, 3),
             "vp": 5.9,

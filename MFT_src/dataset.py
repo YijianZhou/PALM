@@ -1,6 +1,7 @@
 """ Data i/o interface for MFT (CPU ver)
 """
 import time
+from concurrent.futures import ThreadPoolExecutor
 from fractions import Fraction
 
 import torch
@@ -11,6 +12,7 @@ import numpy as np
 from scipy.signal import resample_poly
 import config
 from template_store import TemplateDataset, read_ftemp
+from rolling_waveform import merge_cached_tail, raw_tail
 
 # import config
 cfg = config.Config()
@@ -30,40 +32,83 @@ min_sta = cfg.min_sta
 max_sta = cfg.max_sta
 
 
-def buffered_data_paths(date, data_dir, buffer_seconds):
-    data_dict = get_data_dict(date, data_dir)
+def load_raw_tail_cache(date, data_dir, sta_dict, buffer_seconds=0.0):
+    """Read only the final raw tail needed to seed a sequential run."""
     if buffer_seconds <= 0:
-        return data_dict
-    for day_offset in (-1, 1):
-        nearby = get_data_dict(date + day_offset * 86400, data_dir)
-        for net_sta in data_dict:
-            data_dict[net_sta].extend(nearby.get(net_sta, []))
-    return data_dict
+        return {}
+    day_end = date + 86400
+    paths_by_station = get_data_dict(date, data_dir)
+    items = [
+        (net_sta, paths)
+        for net_sta, paths in sorted(paths_by_station.items())
+        if net_sta in sta_dict
+    ]
+
+    def load(item):
+        net_sta, paths = item
+        stream = read_stream(
+            paths,
+            sta_dict[net_sta][3],
+            start_time=day_end - 2.0 * buffer_seconds,
+            end_time=day_end,
+        )
+        return net_sta, raw_tail(stream, day_end, buffer_seconds)
+
+    if num_workers > 1 and len(items) > 1:
+        with ThreadPoolExecutor(
+            max_workers=min(num_workers, len(items))
+        ) as executor:
+            results = executor.map(load, items)
+            return {net_sta: tail for net_sta, tail in results if tail}
+    return {net_sta: tail for net_sta, tail in map(load, items) if tail}
 
 
-def read_data(date, data_dir, sta_dict, buffer_seconds=0.0):
+def read_data(
+    date, data_dir, sta_dict, buffer_seconds=0.0,
+    previous_raw_tails=None,
+):
     """ Read data (continuous waveform)
     Input
       data_dict = {net_sta: stream_paths}
     Output
       data_dict = {net_sta: [detection_data, detection_norm, phase_data]}
+      next_raw_tails = {net_sta: unfiltered final 2*buffer stream}
     """
     t=time.time()
     print('reading continuous data')
-    data_dict = buffered_data_paths(date, data_dir, buffer_seconds)
+    data_dict = get_data_dict(date, data_dir)
     to_del = [net_sta for net_sta in data_dict.keys() if net_sta not in sta_dict]
     for net_sta in to_del: data_dict.pop(net_sta)
-    start_time = date - buffer_seconds
-    end_time = date + 86400 + buffer_seconds
-    data_dataset = Data(data_dict, sta_dict, start_time, end_time)
-    data_loader = DataLoader(data_dataset, num_workers=num_workers, batch_size=None)
+    start_time = date - 2.0 * buffer_seconds
+    end_time = date + 86400
+    data_dataset = Data(
+        data_dict, sta_dict, date, start_time, end_time,
+        buffer_seconds, previous_raw_tails or {},
+    )
+    if num_workers > 1 and len(data_dataset) > 1:
+        executor = ThreadPoolExecutor(
+            max_workers=min(num_workers, len(data_dataset))
+        )
+        results = executor.map(data_dataset.__getitem__, range(len(data_dataset)))
+    else:
+        executor = None
+        results = map(data_dataset.__getitem__, range(len(data_dataset)))
     todel = []
-    for (net_sta, data_i) in data_loader:
-        if len(data_i)==0: todel.append(net_sta); continue
-        data_dict[net_sta] = data_i
-        print('read {} | time {:.1f}s'.format(net_sta, time.time()-t))
+    next_raw_tails = {}
+    try:
+        for net_sta, data_i, next_tail in results:
+            if next_tail:
+                next_raw_tails[net_sta] = next_tail
+            if len(data_i)==0:
+                todel.append(net_sta)
+                continue
+            data_dict[net_sta] = [torch.from_numpy(value) for value in data_i]
+            print('read {} | time {:.1f}s'.format(net_sta, time.time()-t))
+    finally:
+        if executor is not None:
+            executor.shutdown()
     for net_sta in todel: data_dict.pop(net_sta)
-    return data_dict
+    return data_dict, next_raw_tails
 
 
 def read_temp(temp_pha, temp_root):
@@ -106,12 +151,18 @@ def read_temp(temp_pha, temp_root):
 class Data(Dataset):
   """ Dataset for reading data (continuous waveform)
   """
-  def __init__(self, data_dict, sta_dict, start_time, end_time):
+  def __init__(
+      self, data_dict, sta_dict, day_start, start_time, end_time,
+      buffer_seconds, previous_raw_tails,
+  ):
     self.data_dict = data_dict
     self.sta_list = sorted(list(data_dict.keys()))
     self.sta_dict = sta_dict
+    self.day_start = day_start
     self.start_time = start_time
     self.end_time = end_time
+    self.buffer_seconds = buffer_seconds
+    self.previous_raw_tails = previous_raw_tails
 
   def __getitem__(self, index):
     # read stream
@@ -119,15 +170,24 @@ class Data(Dataset):
     st_paths = self.data_dict[net_sta]
     gain = self.sta_dict[net_sta][3]
     stream = read_stream(
-        st_paths, gain, start_time=self.start_time, end_time=self.end_time
+        st_paths, gain, start_time=self.day_start, end_time=self.end_time
     )
-    if len(stream)!=3: return net_sta, []
+    if len(stream)!=3: return net_sta, [], None
+    next_tail = raw_tail(stream, self.end_time, self.buffer_seconds)
+    stream = merge_cached_tail(
+        stream,
+        self.previous_raw_tails.get(net_sta),
+        self.start_time,
+        self.end_time,
+    )
+    if len(stream)!=3: return net_sta, [], next_tail
     phase_stream = preprocess(stream, phase_samp_rate)
-    if len(phase_stream)!=3: return net_sta, []
+    if len(phase_stream)!=3: return net_sta, [], next_tail
     phase_stream = trim_stream(
-        phase_stream, self.start_time, self.end_time
+        phase_stream, self.start_time, self.end_time,
+        allow_left_padding=net_sta not in self.previous_raw_tails,
     )
-    if len(phase_stream) != 3: return net_sta, []
+    if len(phase_stream) != 3: return net_sta, [], next_tail
     detection_stream = resample_stream(phase_stream, samp_rate)
     duration = self.end_time - self.start_time
     phase_npts = int(round(duration * phase_samp_rate))
@@ -147,7 +207,7 @@ class Data(Dataset):
         detection_data.astype(np.float32),
         norm_data.astype(np.float32),
         phase_data.astype(np.float32),
-    ]
+    ], next_tail
 
   def __len__(self):
     return len(self.sta_list)
@@ -259,10 +319,10 @@ def read_stream(st_paths, gain=None, start_time=None, end_time=None):
         for ii in range(3): st[ii].data = st[ii].data / [ge,gn,gz][ii]
     return st
 
-def trim_stream(stream, start_time, end_time):
+def trim_stream(stream, start_time, end_time, allow_left_padding=False):
     tolerance = 0.5 / min(trace.stats.sampling_rate for trace in stream)
     if any(
-        trace.stats.starttime > start_time + tolerance
+        (not allow_left_padding and trace.stats.starttime > start_time + tolerance)
         or trace.stats.endtime < end_time - tolerance
         for trace in stream
     ):

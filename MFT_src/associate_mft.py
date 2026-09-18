@@ -417,6 +417,11 @@ def main():
   start_time, end_time = [
       UTCDateTime(value) for value in args.time_range.split("-")
   ]
+  data_buffer_sec = float(getattr(cfg, "data_buffer_sec", 30.0))
+  if data_buffer_sec < 0:
+    raise ValueError("data_buffer_sec must be nonnegative")
+  start_time -= data_buffer_sec
+  end_time -= data_buffer_sec
   templates = template_metadata(args.temp_pha)
   station_dict = cfg.get_sta_dict(args.sta_file)
   detections = read_detections(args.det_pha, start_time, end_time)

@@ -6,8 +6,9 @@ import numpy as np
 from obspy import UTCDateTime
 import torch.multiprocessing as mp
 import torch
-from dataset_gpu import read_temp, read_data
+from dataset_gpu import load_raw_tail_cache, read_temp, read_data
 from mft_lib_gpu import mft_det, cc_pick, write_ctlg, write_pha
+from rolling_waveform import processing_bounds
 import config
 import warnings
 warnings.filterwarnings("ignore")
@@ -46,6 +47,8 @@ if __name__ == '__main__':
   data_buffer_sec = float(getattr(cfg, 'data_buffer_sec', 30.0))
   if data_buffer_sec < 0:
     raise ValueError('data_buffer_sec must be nonnegative')
+  if data_buffer_sec and data_buffer_sec < float(cfg.taper_max_length_sec):
+    raise ValueError('data_buffer_sec must be at least taper_max_length_sec')
   # i/o paths
   out_root = os.path.split(args.out_pha)[0]
   if not os.path.exists(out_root): os.makedirs(out_root)
@@ -60,16 +63,23 @@ if __name__ == '__main__':
   print('time range: {} to {}'.format(start_date.date, end_date.date))
   # for all days
   num_day = (end_date.date - start_date.date).days
+  previous_raw_tails = load_raw_tail_cache(
+      start_date - 86400, args.data_dir, sta_dict,
+      buffer_seconds=data_buffer_sec,
+  )
   for day_idx in range(num_day):
     # read data
     torch.cuda.empty_cache()
     date = start_date + day_idx*86400
     print('-'*40)
     print('detecting %s'%date.date)
-    data_start = date - data_buffer_sec
-    data_dict = read_data(
-        date, args.data_dir, sta_dict, buffer_seconds=data_buffer_sec
+    data_start = date - 2.0 * data_buffer_sec
+    output_start, output_end = processing_bounds(date, data_buffer_sec)
+    data_dict, next_raw_tails = read_data(
+        date, args.data_dir, sta_dict, buffer_seconds=data_buffer_sec,
+        previous_raw_tails=previous_raw_tails,
     )
+    previous_raw_tails = next_raw_tails
     if len(data_dict)<min_sta: continue
     # for all templates
     for [temp_name, temp_loc, temp_pick_dict] in temp_list:
@@ -79,7 +89,7 @@ if __name__ == '__main__':
         # cc pick
         for [det_ot, det_cc] in dets:
             absolute_ot = data_start + det_ot
-            if not date <= absolute_ot < date + 86400:
+            if not output_start <= absolute_ot < output_end:
                 continue
             picks = cc_pick(det_ot, temp_pick_dict, data_dict)
             det_ot = absolute_ot

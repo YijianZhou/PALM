@@ -12,6 +12,8 @@ class PS_Pair_Assoc(object):
   Inputs
     sta_dict: station location dict
     xy_margin: ratio of lateral (x-y) margin relative to the station range
+    lat_range: optional explicit [minimum, maximum] latitude search range
+    lon_range: optional explicit [minimum, maximum] longitude search range
     xy_grid: grid width for x-y axis (in degree)
     z_grids: grids for z axis (in km)
     ot_dev: max time dev for ot assoc
@@ -33,10 +35,16 @@ class PS_Pair_Assoc(object):
                ot_dev    = 1.4,
                max_res   = 1.2,
                max_drop  = 1, 
-               min_sta   = 4):
+               min_sta   = 4,
+               lat_range = None,
+               lon_range = None):
     self.sta_dict = sta_dict
     self.xy_margin = xy_margin
+    self.lat_range = self._validate_range("lat_range", lat_range)
+    self.lon_range = self._validate_range("lon_range", lon_range)
     self.xy_grid = xy_grid
+    if not np.isfinite(self.xy_grid) or self.xy_grid <= 0:
+      raise ValueError("xy_grid must be positive")
     self.z_grids = z_grids
     self.vp = vp
     self.ot_dev = ot_dev
@@ -44,6 +52,21 @@ class PS_Pair_Assoc(object):
     self.max_drop = max_drop
     self.min_sta = min_sta
     self.tt_dict = self.calc_tt()
+
+  @staticmethod
+  def _validate_range(name, value):
+    if value is None:
+      return None
+    try:
+      valid_length = len(value) == 2
+    except TypeError:
+      valid_length = False
+    if not valid_length:
+      raise ValueError("{} must contain [minimum, maximum]".format(name))
+    bounds = tuple(float(item) for item in value)
+    if not np.all(np.isfinite(bounds)) or bounds[0] >= bounds[1]:
+      raise ValueError("{} must be finite and increasing".format(name))
+    return bounds
 
   def associate(
       self, picks, out_ctlg=None, out_pha=None, verbose=True,
@@ -206,11 +229,29 @@ class PS_Pair_Assoc(object):
     lon = [sta_loc[1] for sta_loc in self.sta_dict.values()]
     lon_margin = self.xy_margin * (np.amax(lon) - np.amin(lon))
     lat_margin = self.xy_margin * (np.amax(lat) - np.amin(lat))
-    lon_min, lon_max = np.amin(lon)-lon_margin, np.amax(lon)+lon_margin
-    lat_min, lat_max = np.amin(lat)-lat_margin, np.amax(lat)+lat_margin
+    lon_min, lon_max = (
+      self.lon_range
+      if self.lon_range is not None
+      else (np.amin(lon)-lon_margin, np.amax(lon)+lon_margin)
+    )
+    lat_min, lat_max = (
+      self.lat_range
+      if self.lat_range is not None
+      else (np.amin(lat)-lat_margin, np.amax(lat)+lat_margin)
+    )
     # set x-y grid
-    x_num = int((lon_max-lon_min) / self.xy_grid)
-    y_num = int((lat_max-lat_min) / self.xy_grid)
+    x_span = (lon_max-lon_min) / self.xy_grid
+    y_span = (lat_max-lat_min) / self.xy_grid
+    x_num = max(
+      1,
+      int(np.floor(x_span + 1e-10)) + 1
+      if self.lon_range is not None else int(x_span),
+    )
+    y_num = max(
+      1,
+      int(np.floor(y_span + 1e-10)) + 1
+      if self.lat_range is not None else int(y_span),
+    )
     # calc P travel time table. Array dimensions remain [z, x, y].
     grid_lon = lon_min + np.arange(x_num) * self.xy_grid
     grid_lat = lat_min + np.arange(y_num) * self.xy_grid

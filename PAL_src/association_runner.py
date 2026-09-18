@@ -8,6 +8,8 @@ import json
 import multiprocessing
 import os
 import traceback
+import time
+from queue import Empty
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -17,12 +19,14 @@ from obspy import UTCDateTime
 
 from phase_merge import merge_phase_files, read_phase_file
 from trigger_counts import read_trigger_counts
+import runtime_console
 
 
 ASSOC_PARAM_NAMES = (
     "xy_margin", "xy_grid", "z_grids", "min_sta",
     "ot_dev", "max_res", "max_drop", "vp",
 )
+OPTIONAL_ASSOC_PARAM_NAMES = ("lat_range", "lon_range")
 ASSOCIATION_PICK_MATCH_TOL_SEC = 0.1
 
 def get_association_buffer_sec(cfg):
@@ -51,7 +55,11 @@ def geometry_key(stations):
 def get_assoc_params(cfg, subnet):
     configured = getattr(cfg, "subnet_assoc_params", None)
     if configured is None:
-        return {name: getattr(cfg, name) for name in ASSOC_PARAM_NAMES}
+        params = {name: getattr(cfg, name) for name in ASSOC_PARAM_NAMES}
+        params.update({
+            name: getattr(cfg, name, None) for name in OPTIONAL_ASSOC_PARAM_NAMES
+        })
+        return params
     params = dict(configured.get("default", {}))
     params.update(configured.get(subnet, {}))
     params.update(configured.get(subnet.split("_")[-1], {}))
@@ -60,7 +68,9 @@ def get_assoc_params(cfg, subnet):
         raise KeyError("missing association params for {}: {}".format(
             subnet, ", ".join(missing)
         ))
-    return {name: params[name] for name in ASSOC_PARAM_NAMES}
+    resolved = {name: params[name] for name in ASSOC_PARAM_NAMES}
+    resolved.update({name: params.get(name) for name in OPTIONAL_ASSOC_PARAM_NAMES})
+    return resolved
 
 
 def to_associator_sta_dict(stations):
@@ -74,6 +84,26 @@ def to_associator_sta_dict(stations):
 
 def utc_day(value):
     return UTCDateTime(str(value))
+
+
+def processing_day_bounds(cfg, observed_date):
+    """Return the half-open pick/event interval owned by a nominal date."""
+    shift = float(getattr(cfg, "data_buffer_sec", 0.0))
+    if shift < 0:
+        raise ValueError("data_buffer_sec must be nonnegative")
+    start = utc_day(observed_date) - shift
+    return start, start + 86400
+
+
+def load_picks(cfg, date, pick_dir):
+    """Load picks, passing PAL's in-memory origin-time velocity when supported."""
+    parameters = inspect.signature(cfg.get_picks).parameters
+    kwargs = {}
+    if "vp" in parameters:
+        kwargs["vp"] = float(getattr(cfg, "picker_vp", 5.9))
+    if "vs" in parameters:
+        kwargs["vs"] = float(getattr(cfg, "picker_vs", 3.45))
+    return cfg.get_picks(date, pick_dir, **kwargs)
 
 
 def load_station_geometry(cfg, station_file, observed_date):
@@ -95,20 +125,23 @@ def buffered_picks(cfg, pick_dir, observed_date, buffer_seconds):
     arrays = []
     for offset in (-1, 0, 1):
         source_date = observed_date + timedelta(days=offset)
-        picks = cfg.get_picks(utc_day(source_date), pick_dir)
+        picks = load_picks(cfg, utc_day(source_date), pick_dir)
         if len(picks):
             arrays.append(picks)
     if not arrays:
-        return cfg.get_picks(utc_day(observed_date), pick_dir)
+        return load_picks(cfg, utc_day(observed_date), pick_dir)
     picks = np.concatenate(arrays)
-    start = utc_day(observed_date) - buffer_seconds
-    end = utc_day(observed_date) + 86400 + buffer_seconds
+    owned_start, owned_end = processing_day_bounds(cfg, observed_date)
+    start = owned_start - buffer_seconds
+    end = owned_end + buffer_seconds
     return picks[(picks["sta_ot"] >= start) & (picks["sta_ot"] < end)]
 
 
-def buffered_pick_arrays(pick_arrays, observed_date, buffer_seconds):
+def buffered_pick_arrays(
+    pick_arrays, observed_date, buffer_seconds, day_shift_seconds=0.0,
+):
     """Filter in-memory adjacent-day picks to one buffered association day."""
-    start = utc_day(observed_date)
+    start = utc_day(observed_date) - float(day_shift_seconds)
     return buffered_pick_interval_arrays(
         pick_arrays, start, start + 86400, buffer_seconds
     )
@@ -187,7 +220,7 @@ def associate_subnet_day(
     if association_buffer_enabled:
         picks = buffered_picks(cfg, pick_dir, observed_date, buffer_seconds)
     else:
-        picks = cfg.get_picks(utc_day(observed_date), pick_dir)
+        picks = load_picks(cfg, utc_day(observed_date), pick_dir)
     return associate_subnet_picks(
         observed_date,
         subnet,
@@ -205,8 +238,9 @@ def merge_canonical_day(
     observed_date, raw_phase_files, output_phase, output_catalog,
     output_groups, cfg,
 ):
-    start = utc_day(observed_date).datetime
-    end = (utc_day(observed_date) + 86400).datetime
+    owned_start, owned_end = processing_day_bounds(cfg, observed_date)
+    start = owned_start.datetime
+    end = owned_end.datetime
     return merge_phase_files(
         raw_phase_files,
         output_phase,
@@ -262,16 +296,27 @@ def input_picks_for_date(
     cfg, pick_dir, observed_date, association_buffer_enabled=True,
 ):
     unique = {}
+    owned_start, owned_end = processing_day_bounds(cfg, observed_date)
     offsets = (-1, 0, 1) if association_buffer_enabled else (0,)
     for offset in offsets:
-        picks = cfg.get_picks(utc_day(observed_date + timedelta(days=offset)), pick_dir)
+        picks = load_picks(
+            cfg, utc_day(observed_date + timedelta(days=offset)), pick_dir
+        )
         for pick in picks:
-            if pick["tp"].date == observed_date:
+            if owned_start <= pick["tp"] < owned_end:
                 unique[_pick_key(pick)] = pick
     return list(unique.values())
 
 
-def associated_phase_picks_for_date(phase_paths, observed_date):
+def associated_phase_picks_for_date(
+    phase_paths, observed_date, interval_start=None, interval_end=None,
+):
+    if interval_start is None:
+        interval_start = utc_day(observed_date)
+    if interval_end is None:
+        interval_end = UTCDateTime(interval_start) + 86400
+    interval_start = UTCDateTime(interval_start)
+    interval_end = UTCDateTime(interval_end)
     picks = []
     seen = set()
     for path in phase_paths:
@@ -282,7 +327,7 @@ def associated_phase_picks_for_date(phase_paths, observed_date):
             for pick in event["picks"]:
                 tp = UTCDateTime(pick["p"])
                 ts = UTCDateTime(pick["s"])
-                if tp.date != observed_date:
+                if not interval_start <= tp < interval_end:
                     continue
                 key = (pick["sta"], round(float(tp), 6), round(float(ts), 6))
                 if key not in seen:
@@ -293,15 +338,21 @@ def associated_phase_picks_for_date(phase_paths, observed_date):
 
 def write_association_rate_from_picks(
     observed_date, input_picks, canonical_phase_paths, output_path,
-    trigger_counts=None,
+    trigger_counts=None, interval_start=None, interval_end=None,
 ):
     """Write rates using raw STA/LTA triggers when an inventory is supplied."""
     denominator_source = (
         "accepted_picks" if trigger_counts is None else "stalta_triggers"
     )
+    if interval_start is None:
+        interval_start = utc_day(observed_date)
+    if interval_end is None:
+        interval_end = UTCDateTime(interval_start) + 86400
+    interval_start = UTCDateTime(interval_start)
+    interval_end = UTCDateTime(interval_end)
     by_station = {}
     for pick in input_picks:
-        if pick["tp"].date != observed_date:
+        if not interval_start <= pick["tp"] < interval_end:
             continue
         by_station.setdefault(str(pick["net_sta"]), []).append({
             "tp": pick["tp"], "ts": pick["ts"], "matched": False,
@@ -309,7 +360,7 @@ def write_association_rate_from_picks(
 
     tolerance = ASSOCIATION_PICK_MATCH_TOL_SEC
     associated = associated_phase_picks_for_date(
-        canonical_phase_paths, observed_date
+        canonical_phase_paths, observed_date, interval_start, interval_end
     )
     for station, tp, ts in associated:
         candidates = by_station.get(station, [])
@@ -402,9 +453,12 @@ def write_association_rate(
     trigger_counts = read_trigger_counts(
         pick_dir, observed_date, required=True
     )
+    owned_start, owned_end = processing_day_bounds(cfg, observed_date)
     return write_association_rate_from_picks(
         observed_date, input_picks, canonical_phase_paths, output_path,
         trigger_counts=trigger_counts,
+        interval_start=owned_start,
+        interval_end=owned_end,
     )
 
 
@@ -461,12 +515,24 @@ def _status_paths(run, stage, observed_date, subnet=None):
     return root / (stem + ".done.json"), root / (stem + ".failed.json")
 
 
-def _should_skip(run, done_path, failed_path):
+def _should_skip(run, done_path, failed_path, cfg):
     if run.overwrite:
         return False
-    if done_path.exists():
-        return True
-    return failed_path.exists() and not run.retry_failed_days
+    status_path = done_path if done_path.exists() else failed_path
+    if not status_path.exists():
+        return False
+    if status_path == failed_path and run.retry_failed_days:
+        return False
+    try:
+        metadata = json.loads(status_path.read_text(encoding="utf-8"))
+        recorded = metadata.get("data_buffer_sec")
+        expected = float(getattr(cfg, "data_buffer_sec", 0.0))
+        return (
+            float(recorded) == expected
+            if recorded is not None else expected == 0.0
+        )
+    except (OSError, TypeError, ValueError):
+        return False
 
 
 def _raw_catalog(run, subnet, observed_date):
@@ -500,11 +566,12 @@ def _raw_worker(task):
         raw_catalog = _raw_catalog(run, subnet, observed_date)
         raw_phase = _raw_phase(run, subnet, observed_date)
         if (
-            _should_skip(run, done_path, failed_path)
+            _should_skip(run, done_path, failed_path, cfg)
             and raw_catalog.exists()
             and raw_phase.exists()
         ):
             results.append((label, "skipped"))
+            _report_progress(label, "skipped")
             continue
         log_path = run.path("logs", "raw_assoc_{}_{}.log".format(subnet, _date_code(observed_date)))
         try:
@@ -525,7 +592,13 @@ def _raw_worker(task):
                         ),
                         run.association_buffer_enabled,
                     )
-                    summary.update({"date": _date_code(observed_date), "subnet": subnet})
+                    summary.update({
+                        "date": _date_code(observed_date),
+                        "subnet": subnet,
+                        "data_buffer_sec": float(getattr(
+                            cfg, "data_buffer_sec", 0.0
+                        )),
+                    })
                     print(json.dumps(summary, indent=2))
             _atomic_json(done_path, summary)
             failed_path.unlink(missing_ok=True)
@@ -534,12 +607,14 @@ def _raw_worker(task):
             _atomic_json(failed_path, {
                 "date": _date_code(observed_date),
                 "subnet": subnet,
+                "data_buffer_sec": float(getattr(cfg, "data_buffer_sec", 0.0)),
                 "error": repr(exc),
                 "traceback": traceback.format_exc(),
                 "log": str(log_path),
             })
             state = "failed"
         results.append((label, state))
+        _report_progress(label, state)
     return results
 
 
@@ -551,7 +626,7 @@ def _merge_day(task):
     merged_catalog = _merged_file(run, "catalog", observed_date, ".dat")
     merged_groups = _merged_file(run, "event_groups", observed_date, ".csv")
     if (
-        _should_skip(run, done_path, failed_path)
+        _should_skip(run, done_path, failed_path, cfg)
         and merged_phase.exists()
         and merged_catalog.exists()
         and merged_groups.exists()
@@ -575,12 +650,16 @@ def _merge_day(task):
             cfg,
         )
         summary["date"] = _date_code(observed_date)
+        summary["data_buffer_sec"] = float(getattr(
+            cfg, "data_buffer_sec", 0.0
+        ))
         _atomic_json(done_path, summary)
         failed_path.unlink(missing_ok=True)
         return _date_code(observed_date), "completed"
     except Exception as exc:
         _atomic_json(failed_path, {
             "date": _date_code(observed_date),
+            "data_buffer_sec": float(getattr(cfg, "data_buffer_sec", 0.0)),
             "error": repr(exc),
             "traceback": traceback.format_exc(),
         })
@@ -595,7 +674,7 @@ def _finalize_day(task):
     merged_phase = _merged_file(run, "phase", observed_date, ".dat")
     merged_catalog = _merged_file(run, "catalog", observed_date, ".dat")
     if (
-        _should_skip(run, done_path, failed_path)
+        _should_skip(run, done_path, failed_path, cfg)
         and rate_file.exists()
         and merged_phase.exists()
         and merged_catalog.exists()
@@ -615,6 +694,7 @@ def _finalize_day(task):
         merge_summary = json.loads(merge_done.read_text(encoding="utf-8"))
         summary = {
             "date": _date_code(observed_date),
+            "data_buffer_sec": float(getattr(cfg, "data_buffer_sec", 0.0)),
             **rate_summary,
             "num_events": merge_summary["num_merged_events"],
             "num_input_subnet_events": merge_summary["num_input_events"],
@@ -630,6 +710,7 @@ def _finalize_day(task):
     except Exception as exc:
         _atomic_json(failed_path, {
             "date": _date_code(observed_date),
+            "data_buffer_sec": float(getattr(cfg, "data_buffer_sec", 0.0)),
             "error": repr(exc),
             "traceback": traceback.format_exc(),
         })
@@ -654,11 +735,100 @@ def _build_raw_tasks(run, worker_dates):
     return tasks
 
 
+_PROGRESS_QUEUE = None
+
+
+def _init_progress(queue):
+    global _PROGRESS_QUEUE
+    _PROGRESS_QUEUE = queue
+
+
+def _report_progress(label, state):
+    if _PROGRESS_QUEUE is not None:
+        _PROGRESS_QUEUE.put((label, state))
+
+
+def _progress_task(task):
+    function, item = task
+    result = function(item)
+    if not isinstance(result, list):
+        _report_progress(*result)
+    return result
+
+
+class _DayProgress:
+    def __init__(self, stage, total_days, subnets=1):
+        self.stage = stage
+        self.total_days = total_days
+        self.subnets = subnets
+        self.seen = set()
+        self.days = {}
+        self.counts = {"completed": 0, "skipped": 0, "failed": 0}
+        self.started = time.monotonic()
+        self.last_time = self.started
+        self.last_done = 0
+
+    def add(self, label, state):
+        if label in self.seen:
+            return
+        self.seen.add(label)
+        day = label.rsplit(":", 1)[-1]
+        self.days[day] = self.days.get(day, 0) + 1
+        self.counts[state] += 1
+        self.show(force=state == "failed")
+
+    def show(self, force=False):
+        done = sum(count == self.subnets for count in self.days.values())
+        now = time.monotonic()
+        if not force and done < self.last_done + 10 and now - self.last_time < 30:
+            return
+        runtime_console.log(
+            "progress",
+            "{} | {} | days processed {}/{} | tasks completed={} skipped={} failed={} | elapsed {:.0f}s".format(
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"), self.stage,
+                done, self.total_days, self.counts["completed"],
+                self.counts["skipped"], self.counts["failed"], now - self.started,
+            ),
+        )
+        self.last_done = done
+        self.last_time = now
+
+
 def _run_parallel(function, items, worker_count):
     if not items:
         return []
-    with multiprocessing.Pool(processes=min(worker_count, len(items))) as pool:
-        return pool.map(function, items)
+    raw = function is _raw_worker
+    total_days = len({day for _, _, dates in items for day in dates}) if raw else len(items)
+    subnets = len({subnet for _, subnet, _ in items}) if raw else 1
+    stage = {
+        "_raw_worker": "association (including halo days)",
+        "_merge_day": "merge (including halo days)",
+        "_finalize_day": "finalization",
+    }.get(function.__name__, function.__name__)
+    progress = _DayProgress(stage, total_days, subnets)
+    progress.show(force=True)
+    queue = multiprocessing.Queue()
+    try:
+        with multiprocessing.Pool(
+            processes=min(worker_count, len(items)),
+            initializer=_init_progress, initargs=(queue,),
+        ) as pool:
+            pending = pool.map_async(_progress_task, [(function, item) for item in items])
+            while not pending.ready():
+                try:
+                    progress.add(*queue.get(timeout=0.2))
+                except Empty:
+                    progress.show()
+            results = pending.get()
+            # Reconcile notifications still in transit and preserve the original result shape.
+            for result in results:
+                for label, state in result if isinstance(result, list) else [result]:
+                    progress.add(label, state)
+            progress.show(force=True)
+            return results
+    finally:
+        queue.close()
+        queue.join_thread()
 
 
 def _require_success(stage, results):
@@ -682,6 +852,8 @@ def run_daily_association(
     association_buffer_enabled=True,
 ):
     """Associate target days, optionally using adjacent-day pick and event halos."""
+    console_cfg = config_factory()
+    runtime_console.configure(console_cfg)
     run = AssociationRun(
         subnet_station_files={
             name: str(Path(path).resolve()) for name, path in subnet_station_files.items()
@@ -738,6 +910,13 @@ def run_daily_association(
         work_dates = target_dates
 
     mode = "buffered" if run.association_buffer_enabled else "independent-day"
+    runtime_console.log(
+        "AI-PAL",
+        "offline association | target={} | subnets={} | workers={}".format(
+            time_range, len(run.subnet_station_files), run.num_workers
+        ),
+    )
+    runtime_console.log("stage", "1/3 {} subnet association".format(mode))
     print("stage 1: {} subnet association".format(mode))
     _require_success(
         "raw association",
@@ -747,6 +926,7 @@ def run_daily_association(
         "cross-day and cross-subnet" if run.association_buffer_enabled
         else "same-day cross-subnet"
     )
+    runtime_console.log("stage", "2/3 {} canonical merge".format(merge_scope))
     print("stage 2: {} canonical merge".format(merge_scope))
     _require_success(
         "daily merge",
@@ -756,6 +936,7 @@ def run_daily_association(
             run.num_workers,
         ),
     )
+    runtime_console.log("stage", "3/3 station-date association rates")
     print("stage 3: station-date association rates")
     _require_success(
         "daily finalization",
@@ -766,6 +947,11 @@ def run_daily_association(
         ),
     )
     print("association complete: {} target days".format(len(target_dates)))
+    runtime_console.log(
+        "complete",
+        "association | {} target days".format(len(target_dates)),
+    )
+    runtime_console.log("output", "association products | {}".format(out_root))
 
 def _combine_files(paths, output_path):
     output_path = Path(output_path)
@@ -826,4 +1012,10 @@ def run_buffered_association(
     if output_catalog is not None:
         combine_daily_association_outputs(
             assoc_root, time_range, output_catalog, output_phase
+        )
+        runtime_console.log(
+            "output", "final PAL phase | {}".format(output_phase)
+        )
+        runtime_console.log(
+            "output", "final PAL catalog | {}".format(output_catalog)
         )

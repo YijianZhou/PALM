@@ -332,8 +332,11 @@ def read_data_aws(
     acceleration_instrument_codes=("N",),
     start_time=None,
     end_time=None,
+    to_prep=True,
 ):
     """Merge adjacent daily S3 components and convert counts to velocity."""
+    if not to_prep:
+        raise ValueError("raw SCEDC waveform objects require to_prep=True")
     if not records:
         return Stream()
 
@@ -407,8 +410,8 @@ def read_data_aws(
         output += trace
     return output
 
-def get_pal_picks(date_value, pick_dir):
-    """Read PAL pick output while retaining its NET.STA identifier."""
+def get_pal_picks(date_value, pick_dir, vp=5.9, vs=3.45):
+    """Read PAL picks and derive PAL's rough origin time in memory."""
     dtype = [
         ("net_sta", "O"), ("sta_ot", "O"), ("tp", "O"),
         ("ts", "O"), ("s_amp", "O"),
@@ -419,11 +422,21 @@ def get_pal_picks(date_value, pick_dir):
     picks = []
     with path.open(encoding="utf-8") as fp:
         for line in fp:
-            values = line.rstrip("\n").split(",")
-            if len(values) < 5:
+            values = [value.strip() for value in line.rstrip("\n").split(",")]
+            if len(values) < 4:
                 continue
-            picks.append(
-                (values[0], UTCDateTime(values[1]), UTCDateTime(values[2]),
-                 UTCDateTime(values[3]), float(values[4]))
-            )
+            try:
+                tp, ts = UTCDateTime(values[1]), UTCDateTime(values[2])
+                s_amp = float(values[3])
+                distance = (
+                    (ts - tp) / (1.0 / float(vs) - 1.0 / float(vp))
+                )
+                sta_ot = tp - distance / float(vp)
+            except (TypeError, ValueError):
+                if len(values) < 5:
+                    continue
+                sta_ot = UTCDateTime(values[1])
+                tp, ts = UTCDateTime(values[2]), UTCDateTime(values[3])
+                s_amp = float(values[4])
+            picks.append((values[0], sta_ot, tp, ts, s_amp))
     return np.array(picks, dtype=dtype)

@@ -18,8 +18,8 @@ class Config(object):
     self.amp_ratio_thres = [6,10,3]
     self.amp_win    = [1.,5.]
     self.det_gap    = 5.
-    self.to_prep    = True
-    self.to_filter  = True
+    self.to_prep    = True  # required for raw SCEDC objects
+    self.to_filter  = True  # apply freq_band before PAL picking
     self.freq_band  = [1,20]
     self.data_buffer_sec = 60.0  # rolling unfiltered edge context
     self.station_log_interval = 50
@@ -32,7 +32,8 @@ class Config(object):
     self.subnet_assoc_params = {
         "default": {
             "min_sta": 4, "ot_dev": 1.4, "max_res": 1.2, "max_drop": 1,
-            "xy_margin": 0.1, "xy_grid": 0.02,
+            "xy_margin": 0.1, "lat_range": None, "lon_range": None,
+            "xy_grid": 0.02,
             "z_grids": np.arange(2, 25, 3), "vp": 5.9,
         },
         "full": {"min_sta": 4, "ot_dev": 1.4, "max_res": 1.2},

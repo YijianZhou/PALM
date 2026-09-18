@@ -16,7 +16,7 @@ class STA_LTA_Kurtosis(object):
     amp_ratio_thres: max value of amp ratio, peak_rm, P/P_tail, & P/S
     amp_win: time win to get S amplitude
     det_gap: time gap between detections
-    to_prep: whether preprocess stream
+    to_filter: whether apply the configured frequency filter
     freq_band: frequency band for phase picking
     *note: all time-related params are in sec
   Outputs
@@ -38,7 +38,7 @@ class STA_LTA_Kurtosis(object):
                amp_ratio_thres = [6,10,2], 
                amp_win         = [1.,5.],
                det_gap         = 5.,
-               to_prep         = True,
+               to_filter       = True,
                freq_band       = [1., 40],
                taper_max_length_sec = 10.0,
                vp              = 6.0,
@@ -55,7 +55,7 @@ class STA_LTA_Kurtosis(object):
     self.amp_ratio_thres = amp_ratio_thres
     self.amp_win = amp_win
     self.det_gap = det_gap
-    self.to_prep = to_prep
+    self.to_filter = bool(to_filter)
     self.freq_band = freq_band
     self.taper_max_length_sec = float(taper_max_length_sec)
     self.vp = vp
@@ -87,15 +87,19 @@ class STA_LTA_Kurtosis(object):
 
     # preprocess & extract data
     if len(stream)!=3: return result([], 0)
-    if self.to_prep: stream = self.preprocess(stream, self.freq_band)
+    stream = self.preprocess(stream, self.freq_band, to_filter=self.to_filter)
     if len(stream)==3:
       usable_start = stream[0].stats.starttime + self.taper_max_length_sec
       usable_end = stream[0].stats.endtime - self.taper_max_length_sec
       if usable_end <= usable_start: return result([], 0)
-      stream = stream.slice(usable_start, usable_end, nearest_sample=True)
+      stream.trim(usable_start, usable_end, nearest_sample=True)
     if len(stream)!=3: return result([], 0)
     min_npts = min([len(trace) for trace in stream])
     st_data = np.array([trace.data[0:min_npts] for trace in stream])
+    # PAL needs both matrix operations and ObsPy time slices. Point the traces
+    # at the matrix rows so those two interfaces share one station waveform.
+    for channel_index, trace in enumerate(stream):
+      trace.data = st_data[channel_index]
     # get header
     head = stream[0].stats
     net_sta = '.'.join([head.network, head.station])
@@ -225,9 +229,11 @@ class STA_LTA_Kurtosis(object):
             self._log('{}, {}, {}'.format(net_sta, tp, ts))
             sta_ot = self.calc_ot(tp, ts)
             picks.append((net_sta, sta_ot, tp, ts, s_amp))
-            if out_file: 
+            if out_file:
                 qual_code = '{:.1f},{:.1f},{:.1f},{:.1f}'.format(p_snr, amp_ratio, A12, A13)
-                out_file.write('{},{},{},{},{},{}\n'.format(net_sta, sta_ot, tp, ts, s_amp, qual_code))
+                out_file.write('{},{},{},{},{}\n'.format(
+                    net_sta, tp, ts, s_amp, qual_code
+                ))
         # next detected phase
         rest_det = np.where(trig_index > max(trig_idx,ts_idx,tp_idx) + det_gap_npts)[0]
         if len(rest_det)==0: break
@@ -248,11 +254,12 @@ class STA_LTA_Kurtosis(object):
     sta /= win_sta_npts
     lta[win_lta_npts:]  = data_cum[win_lta_npts:] - data_cum[:-win_lta_npts]
     lta /= win_lta_npts
-    sta_lta = sta/lta
-    sta_lta[0:win_lta_npts] = 0.
-    sta_lta[np.isinf(sta_lta)] = 0.
-    sta_lta[np.isnan(sta_lta)] = 0.
-    return sta_lta
+    valid = np.isfinite(lta) & (lta != 0.0)
+    np.divide(sta, lta, out=sta, where=valid)
+    sta[~valid] = 0.0
+    sta[0:win_lta_npts] = 0.0
+    sta[~np.isfinite(sta)] = 0.0
+    return sta
 
   # calc P wave filter
   def calc_pca_filter(self, data, idx_p, pca_range_npts, pca_win_npts):
@@ -359,6 +366,7 @@ class STA_LTA_Kurtosis(object):
     if min(delta_d)>=0 or max(delta_d)<=0: return 0
     neg_idx = np.where(delta_d<0)[0]
     pos_idx = np.where(delta_d>=0)[0]
+    if len(neg_idx)==0 or len(pos_idx)==0: return 0
     return max(neg_idx[0], pos_idx[0])
 
   def find_second_peak(self, data):
@@ -375,12 +383,12 @@ class STA_LTA_Kurtosis(object):
     if len(neg_peak)==0 or len(pos_peak)==0: return first_peak
     return max(neg_peak[0], pos_peak[0])
 
-  def preprocess(self, stream, freq_band, max_gap=5.):
+  def preprocess(self, stream, freq_band, max_gap=5., to_filter=True):
     # time alignment
     start_time = max([trace.stats.starttime for trace in stream])
     end_time = min([trace.stats.endtime for trace in stream])
     if start_time > end_time: return []
-    stream = stream.slice(start_time, end_time, nearest_sample=True)
+    stream.trim(start_time, end_time, nearest_sample=True)
     # remove nan & inf
     for trace in stream:
         trace.data[np.isnan(trace.data)] = 0
@@ -410,8 +418,10 @@ class STA_LTA_Kurtosis(object):
                 num_tile = int(np.ceil((idx1-idx0)/(idx2-idx1)))
                 data[idx0:idx1] = np.tile(data[idx1:idx2], num_tile)[0:idx1-idx0]
         trace.data = data
-    # filter
+    # Signal conditioning remains required even when the input is pre-filtered.
     stream.detrend('demean').detrend('linear').taper(max_percentage=0.05, max_length=self.taper_max_length_sec)
+    if not to_filter:
+        return stream
     freq_min, freq_max = freq_band
     nyquist = 0.5 * min(float(trace.stats.sampling_rate) for trace in stream)
     if freq_min and float(freq_min) >= nyquist:

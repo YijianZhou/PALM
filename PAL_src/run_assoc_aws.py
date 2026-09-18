@@ -15,6 +15,7 @@ ASSOC_PARAM_NAMES = (
     "xy_margin", "xy_grid", "z_grids", "min_sta",
     "ot_dev", "max_res", "max_drop", "vp",
 )
+OPTIONAL_ASSOC_PARAM_NAMES = ("lat_range", "lon_range")
 
 
 def geometry_key(sta_dict):
@@ -26,7 +27,11 @@ def geometry_key(sta_dict):
 def get_assoc_params(cfg, subnet_name=None):
     configured = getattr(cfg, "subnet_assoc_params", None)
     if configured is None:
-        return {name: getattr(cfg, name) for name in ASSOC_PARAM_NAMES}
+        params = {name: getattr(cfg, name) for name in ASSOC_PARAM_NAMES}
+        params.update({
+            name: getattr(cfg, name, None) for name in OPTIONAL_ASSOC_PARAM_NAMES
+        })
+        return params
 
     params = dict(configured.get("default", {}))
     if subnet_name:
@@ -39,7 +44,9 @@ def get_assoc_params(cfg, subnet_name=None):
                 subnet_name or "default", ", ".join(missing)
             )
         )
-    return {name: params[name] for name in ASSOC_PARAM_NAMES}
+    resolved = {name: params[name] for name in ASSOC_PARAM_NAMES}
+    resolved.update({name: params.get(name) for name in OPTIONAL_ASSOC_PARAM_NAMES})
+    return resolved
 
 
 def run_assoc(
