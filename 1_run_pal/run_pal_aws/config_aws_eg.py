@@ -19,9 +19,9 @@ class Config(object):
     self.amp_win    = [1.,5.]
     self.det_gap    = 5.
     self.to_prep    = True
+    self.to_filter  = True
     self.freq_band  = [1,20]
-    # AWS picking reads only the current daily object to avoid triple S3 I/O.
-    self.data_buffer_sec = 0.0
+    self.data_buffer_sec = 60.0  # rolling unfiltered edge context
     self.station_log_interval = 50
     self.picker_verbose = False
     self.taper_max_length_sec = 10.0

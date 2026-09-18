@@ -76,6 +76,7 @@ pal_files = (
     "data_pipeline_aws.py",
     "phase_merge.py",
     "pick_ensemble.py",
+    "runtime_console.py",
     "trigger_counts.py",
 )
 

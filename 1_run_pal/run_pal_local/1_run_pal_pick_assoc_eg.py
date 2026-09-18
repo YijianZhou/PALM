@@ -19,7 +19,7 @@ TIME_RANGE = "20190704-20190707"  # Exclusive end date.
 # ============================================================================
 # USER SETTINGS: EXECUTION
 # ============================================================================
-NUM_PICK_WORKERS = 3
+NUM_PICK_WORKERS = 3  # Concurrent stations within the current picking day.
 NUM_ASSOC_WORKERS = 3
 OVERWRITE_PICKS = False
 OVERWRITE_ASSOC = False

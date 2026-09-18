@@ -18,9 +18,12 @@ class Config(object):
     self.amp_ratio_thres = [6,10,3]  # max amp ratio for Peak, P/P_tail, & P/S
     self.amp_win    = [1.,5.]        # time win to get S amplitude
     self.det_gap    = 5.             # time gap between detections
-    self.to_prep    = True           # whether to preprocess the raw data
+    self.to_prep    = False          # local archive is prepared by preprocess/
+    self.to_filter  = True           # apply freq_band before PAL picking
+    self.location_priority = ["10", "20", "01", "02", "00", ""]
+    self.channel_priority = ["HH", "BH", "EH", "HN", "EN", "SH"]
     self.freq_band  = [1,20]         # frequency band
-    self.data_buffer_sec = 0.0
+    self.data_buffer_sec = 60.0      # rolling unfiltered edge context
     self.station_log_interval = 50
     self.picker_verbose = False
     self.taper_max_length_sec = 10.0

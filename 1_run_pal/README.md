@@ -42,11 +42,20 @@ remaining sections describe waveform boundaries, configuration, and execution.
 
 ## Waveform Edges
 
-Local and AWS PAL training-label workflows read only the current UTC day's
-waveform files or S3 objects. This avoids opening, downloading, and decoding
-neighboring days. `taper_max_length_sec` (default 10 s) is both the taper cap
-and the unusable duration removed from each end after filtering. PAL writes a
-pick only when its P arrival is inside `[target_day_start, target_day_end)`.
+PAL uses the same rolling raw-tail strategy as AI-PAL. With the default
+`data_buffer_sec = 60`, the run seeds its first date from the preceding day's
+final 120 s, then caches the current day's final 120 s for the next date. Each
+date therefore preprocesses 24 hours plus 120 s while normally opening only
+the current daily input.
+
+Dates are processed sequentially. Within each date, `num_workers` stations are
+read and picked concurrently; all station results are collected before the
+cache advances to the following date. Pick-file writes remain centralized.
+
+The file named for nominal date `D` owns P arrivals in
+`[D - data_buffer_sec, D + 1 day - data_buffer_sec)`. Association and daily
+event filtering use the same shifted bounds. Set `data_buffer_sec = 0` to
+retain strict UTC-day ownership without edge context.
 ## Local Workflow
 
 Edit the clearly marked user-settings blocks in `run_pal_local/` and run either
@@ -59,12 +68,10 @@ python 2.1_run_pal_pick_eg.py
 python 2.2_run_pal_assoc_eg.py
 ```
 
-For station files with time-varying response gains, first run
-`0_normalize_station_gain_intervals_eg.py`. It fills each internal metadata gap
-at the temporal midpoint between the adjacent gain epochs and writes an audit
-CSV. Set `STUDY_START` and `STUDY_END` to extend the first and last epochs over
-the complete study period. Static one-gain and three-gain station rows pass
-through unchanged.
+Station metadata preparation now lives in `../preprocess/`. Its numbered
+workflow selects channel epochs and normalizes time-varying gain intervals
+before publishing the station CSV consumed here. There is no station-preparation
+step in `run_pal_local/`.
 
 Waveform readers use half-open gain intervals (`t0 <= time < t1`). If an
 unprocessed station file still has a gap or lacks coverage outside its first or
@@ -89,8 +96,10 @@ num_unassociated_picks = num_picks - num_associated_picks
 ```
 
 This retains station-days whose triggers all fail QC with association ratio
-zero. Separated association requires sidecars created by the current picker;
-legacy `.pick` files without them must be regenerated.
+zero. Separated association requires trigger-count and ownership sidecars
+created by the current picker. Legacy buffered `.pick` files without ownership
+metadata are regenerated once; legacy files remain resumable when
+`data_buffer_sec = 0`.
 
 The S picker keeps the PCA amplitude-peak anchor. S STA/LTA first searches from
 the earlier of the PCA interval end and half the P-to-S-peak interval through
@@ -168,9 +177,10 @@ python processing_job/monitor_pick_job.py
 The submitter stages its runtime JSON, config, station file, and required
 `PAL_src` modules. Existing output is restored when
 `resume_existing_output = True`; completed daily status files are then skipped
-according to the runner settings. Pending dates are dynamically assigned to
-persistent worker processes one day at a time, so unusually slow dates do not
-leave the rest of the instance idle.
+according to the runner settings. AWS dates run sequentially, while
+`num_workers` controls concurrent station processing within the current date.
+This keeps one rolling preceding-day tail cache and avoids repeated neighboring
+day reads.
 
 Daily outputs are stored under the default SageMaker bucket:
 
@@ -218,8 +228,8 @@ aggregates daily pick, associated-pick, and event counts by month.
 
 The submitters stage the current implementations from `PALM_ROOT/PAL_src`,
 including AWS waveform access, picking and association runners, PAL models,
-phase merging, and picker-ensemble metadata support. Station files remain under
-`run_pal_aws/input/`.
+rolling waveform context, phase merging, and picker-ensemble metadata support.
+Station files remain under `run_pal_aws/input/`.
 ### Waveform rules
 
 For each date, the pipeline selects only the band active in the PAL station

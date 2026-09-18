@@ -30,7 +30,7 @@ station_file = "station_scedc_aws_selected_20200101_20260701_pal.csv"
 time_range = "20200101-20210101"  # Exclusive end date.
 study_year = 2020
 
-num_workers = 16
+num_workers = 16  # Concurrent stations within the current picking day.
 overwrite = False
 retry_failed_dates = False
 
@@ -71,6 +71,7 @@ pal_files = (
     "pick_runner.py",
     "run_pick_aws.py",
     "picker_pal.py",
+    "rolling_waveform.py",
     "trigger_counts.py",
 )
 
