@@ -12,6 +12,7 @@ from obspy import Stream, read
 
 from preprocess_common import (
     active_epochs,
+    preferred_waveform_combinations,
     compact_date,
     component_code,
     iter_days,
@@ -25,6 +26,9 @@ from preprocess_common import (
 # USER SETTINGS
 # ============================================================================
 CASE_CODE = "eg"
+station_selection_order = "channel_first"  # or location_first
+chn_codes = ("HH", "BH", "EH", "HN", "EN", "SH")
+loc_codes = ("10", "20", "01", "02", "00", "")
 STATION_FILE = Path("output/station_%s.csv" % CASE_CODE)
 RAW_ROOT = Path("/data/ai_pal_%s_raw" % CASE_CODE)
 CLEAN_ROOT = Path("/data/ai_pal_%s_daily" % CASE_CODE)
@@ -83,23 +87,20 @@ def validate_fragments(stream, target_rate, source):
 
 
 def active_selectors(station_epochs, day):
-    selectors = {}
-    station_choices = {}
+    selectors = defaultdict(set)
     for epoch in active_epochs(station_epochs, day, day + 86400):
-        key = epoch["net"], epoch["sta"], epoch["band"]
-        location = normalized_location(epoch["location"])
-        net_sta = key[:2]
-        choice = key[2], location
-        if net_sta in station_choices and station_choices[net_sta] != choice:
-            raise ValueError(
-                "multiple location-band selectors for {}.{} on {}; "
-                "run 1.2_reconcile_station_file_eg.py first".format(
-                    key[0], key[1], compact_date(day)
-                )
-            )
-        station_choices[net_sta] = choice
-        selectors[key] = location
+        selectors[epoch['net'], epoch['sta'], epoch['band']].add(normalized_location(epoch['location']))
     return selectors
+
+
+def choose_available_selectors(indexed):
+    combinations = {}
+    for (net, sta, band, component), locations in indexed.items():
+        for location in locations:
+            combinations.setdefault((net, sta, location, band), {'components': set()})['components'].add(component)
+    chosen = preferred_waveform_combinations(combinations, loc_codes, chn_codes, station_selection_order)
+    return {(key[0], key[1], key[3]): key[2] for key, _ in chosen.values()}
+
 
 
 def index_raw_day(day_dir, selectors):
@@ -123,7 +124,7 @@ def index_raw_day(day_dir, selectors):
                 in selectors.items()
                 if key_net == net and key_sta == sta
                 and channel.startswith(band)
-                and location == selected_location
+                and location in selected_location
             ]
             for band in matching_bands:
                 component = component_code(channel)
@@ -306,6 +307,7 @@ def main():
         output_dir.mkdir(parents=True, exist_ok=True)
         selectors = active_selectors(station_epochs, day)
         indexed, header_errors = index_raw_day(raw_dir, selectors)
+        selectors = choose_available_selectors(indexed)
         processable = {}
         for selector in sorted(selectors):
             station_items = {

@@ -1,4 +1,4 @@
-"""Run independent-day PAL association on existing local pick files."""
+"""Run buffered PAL association on existing local pick files."""
 
 import argparse
 from pathlib import Path
@@ -30,7 +30,7 @@ def main():
         num_workers=args.num_workers,
         config_factory=config_pal.Config,
         overwrite=args.overwrite,
-        association_buffer_enabled=False,
+        association_buffer_enabled=True,
         output_catalog=args.out_ctlg,
         output_phase=args.out_pha,
     )
@@ -38,4 +38,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

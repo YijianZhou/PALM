@@ -7,6 +7,7 @@ import warnings
 
 import numpy as np
 from obspy import read, Stream, UTCDateTime
+from station_inventory import read_inventory, selection_rank, calibrate_trace
 
 
 _WARNED_GAIN_FALLBACKS = set()
@@ -168,13 +169,12 @@ def read_assoc_rate(path):
     return pick_num_dict, num_picks
 
 
-def get_data_dict(date, data_dir, normalize_to_three_channels=True):
+def get_data_dict(date, data_dir, normalize_to_three_channels=True, **selection):
     """Return all candidate paths for each station on one UTC date.
 
     Candidate paths must remain intact until ``read_data`` can inspect their
-    trace headers and choose a band, location, and component set. The boolean
-    is retained for API compatibility; when false, discovery keeps only
-    stations represented by exactly three files.
+    trace headers and choose a band, location, and component set. Component
+    completeness is checked during preparation, not by counting filenames.
     """
     data_dict = {}
     date_code = "{:0>4}{:0>2}{:0>2}".format(date.year, date.month, date.day)
@@ -182,14 +182,12 @@ def get_data_dict(date, data_dir, normalize_to_three_channels=True):
         fname = os.path.basename(st_path)
         net_sta = ".".join(fname.split(".")[0:2])
         data_dict.setdefault(net_sta, []).append(st_path)
-    for net_sta, paths in list(data_dict.items()):
-        if not normalize_to_three_channels and len(paths) != 3:
-            data_dict.pop(net_sta)
     return data_dict
 
 
 def get_buffered_data_dict(
     date, data_dir, buffer_seconds=60.0, normalize_to_three_channels=True,
+    **selection,
 ):
     """Return station paths for one UTC day plus adjacent-day buffer files."""
     current = get_data_dict(
@@ -215,7 +213,7 @@ def get_1chn_data(date, data_dir):
     return get_data_dict(date, data_dir, normalize_to_three_channels=True)
 
 
-def load_station_stream(date, data_dir, net_sta, normalize_to_three_channels=True):
+def load_station_stream(date, data_dir, net_sta, normalize_to_three_channels=True, **selection):
     """Load one local station-day stream for training-sample cutters."""
     stream_paths = get_data_dict(
         date, data_dir, normalize_to_three_channels=normalize_to_three_channels
@@ -224,12 +222,13 @@ def load_station_stream(date, data_dir, net_sta, normalize_to_three_channels=Tru
         return []
     try:
         unique_paths = list(dict.fromkeys(stream_paths))
+        if normalize_to_three_channels:
+            unique_paths = select_local_paths(unique_paths, **selection)
         stream = read(unique_paths[0])
         for path in unique_paths[1:]:
             stream += read(path)
-        stream.merge(fill_value=0)
-        if len(stream) != 3 and normalize_to_three_channels:
-            stream = _normalize_stream_to_three(stream)
+        stream, _ = prepare_local_stream(stream, net_sta,
+            normalize_to_three_channels=normalize_to_three_channels, **selection)
         return stream
     except Exception:
         return []
@@ -354,12 +353,35 @@ def _read_local_fragments(st_paths, start_time=None, end_time=None):
     return stream
 
 
+def select_local_paths(paths, channel_priority=DEFAULT_CHANNEL_PRIORITY,
+                       location_priority=DEFAULT_LOCATION_PRIORITY,
+                       station_selection_order="channel_first"):
+    """Avoid decoding alternatives when standard NET.STA.LOC.CHANNEL names suffice."""
+    groups = {}
+    for path in paths:
+        fields = os.path.basename(path).split(".")
+        if len(fields) < 5 or len(fields[2]) > 2:
+            return paths  # Legacy/custom names require header-based selection.
+        channel = fields[3].split("__", 1)[0]
+        if len(channel) != 3 or _component_code(channel) not in COMPONENT_ORDER:
+            return paths
+        groups.setdefault((channel[:2], _normalize_location(fields[2])), []).append(path)
+    if not groups:
+        return paths
+    key = min(groups, key=lambda item: selection_rank(item[0], item[1],
+              channel_priority, location_priority, station_selection_order))
+    return groups[key]
+
+
 def prepare_local_stream(
     stream,
     net_sta,
     location_priority=DEFAULT_LOCATION_PRIORITY,
     channel_priority=DEFAULT_CHANNEL_PRIORITY,
     normalize_to_three_channels=True,
+    station_selection_order="channel_first",
+    gain=None,
+    allow_gain_fallback=False,
 ):
     """Select and merge one local station stream using the AWS QC contract."""
     grouped = {}
@@ -377,13 +399,14 @@ def prepare_local_stream(
     group_components = {}
     for band, location, component, _ in grouped:
         group_components.setdefault((band, location), set()).add(component)
+    if not normalize_to_three_channels:
+        group_components = {key: value for key, value in group_components.items() if len(value) == 3}
+        if not group_components:
+            return Stream(), []
     band, location = min(
         group_components,
-        key=lambda item: (
-            -len(group_components[item]),
-            _band_rank(item[0], channel_priority),
-            _priority_rank(item[1], location_priority),
-        ),
+        key=lambda item: selection_rank(item[0], item[1], channel_priority,
+                                        location_priority, station_selection_order),
     )
 
     available = group_components[(band, location)]
@@ -407,6 +430,9 @@ def prepare_local_stream(
         # Lettered orientations are preferred over equivalent numeric channels.
         channel = min(channels, key=lambda item: (item[-1] in "123", item))
         fragments = grouped[(band, location, component, channel)]
+        if isinstance(gain, dict):
+            for trace in fragments:
+                calibrate_trace(trace, gain, allow_fallback=allow_gain_fallback)
         target = max(
             fragments,
             key=lambda trace: float(trace.stats.endtime - trace.stats.starttime),
@@ -415,7 +441,11 @@ def prepare_local_stream(
         _validate_mseed_fragments(fragments, target_rate, net_sta)
         for trace in fragments:
             _interpolate_trace(trace, target_rate)
+        gain_missing = any(tr.stats.get('gain_missing', False) for tr in fragments)
         fragments.merge(method=1, fill_value=0)
+        if gain_missing:
+            for tr in fragments:
+                tr.stats.gain_missing = True
         if len(fragments) != 1:
             raise ValueError(
                 "expected one merged {} component for {}, found {}".format(
@@ -607,15 +637,47 @@ def normalize_station_gain_intervals(
 def read_data(
     st_paths, sta_dict, start_time=None, end_time=None,
     normalize_to_three_channels=True,
-    to_prep=True,
+    to_clean=None,
     location_priority=DEFAULT_LOCATION_PRIORITY,
     channel_priority=DEFAULT_CHANNEL_PRIORITY,
+    station_selection_order="channel_first",
+    *, to_prep=None,
 ):
     """Read local waveforms, optionally select/merge raw traces, and calibrate."""
+    if to_clean is None:
+        to_clean = True if to_prep is None else to_prep
     if not st_paths:
         return Stream()
+    days = {}
+    for path in st_paths:
+        day = os.path.basename(os.path.dirname(path))
+        if len(day) != 8 or not day.isdigit():
+            days = {}
+            break
+        days.setdefault(day, []).append(path)
+    if len(days) > 1:
+        from rolling_waveform import merge_cached_tail
+        combined = Stream()
+        for day, paths in sorted(days.items()):
+            lower, upper = UTCDateTime(day), UTCDateTime(day) + 86400 - 1e-5
+            if start_time is not None:
+                lower = max(lower, UTCDateTime(start_time))
+            if end_time is not None:
+                upper = min(upper, UTCDateTime(end_time))
+            if lower > upper:
+                continue
+            current = read_data(paths, sta_dict, lower, upper,
+                normalize_to_three_channels, to_clean, location_priority,
+                channel_priority, station_selection_order)
+            if current:
+                combined = merge_cached_tail(current, combined,
+                    min(tr.stats.starttime for tr in list(combined) + list(current)),
+                    max(tr.stats.endtime for tr in current))
+        return combined
     print("reading stream: {}".format(st_paths[0]))
     try:
+        if normalize_to_three_channels:
+            st_paths = select_local_paths(st_paths, channel_priority, location_priority, station_selection_order)
         stream = _read_local_fragments(st_paths, start_time, end_time)
     except Exception as exc:
         print("bad data read: {}".format(exc))
@@ -626,7 +688,7 @@ def read_data(
     for trace in stream:
         trace.stats.network, trace.stats.station = net, sta
     gain_components = list(COMPONENT_ORDER)
-    if to_prep:
+    if to_clean:
         try:
             stream, gain_components = prepare_local_stream(
                 stream,
@@ -634,14 +696,22 @@ def read_data(
                 location_priority=location_priority,
                 channel_priority=channel_priority,
                 normalize_to_three_channels=normalize_to_three_channels,
+                station_selection_order=station_selection_order,
+                gain=sta_dict[net_sta][3],
+                allow_gain_fallback=True,
             )
         except Exception as exc:
             print("bad data preparation for {}: {}".format(net_sta, exc))
             return Stream()
     else:
-        # Prepared archives must already contain one unambiguous trace per
-        # component. Merging here only joins adjacent-day pieces of that trace.
+        # Selection and calibration are still required for cleaned archives.
         try:
+            stream, gain_components = prepare_local_stream(
+                stream, net_sta, location_priority, channel_priority,
+                normalize_to_three_channels, station_selection_order,
+                sta_dict[net_sta][3],
+                allow_gain_fallback=True,
+            )
             stream.merge(method=1, fill_value=0)
         except Exception as exc:
             print("bad prepared-data merge for {}: {}".format(net_sta, exc))
@@ -669,7 +739,9 @@ def read_data(
     stream.trim(common_start, common_end, nearest_sample=True)
     stream_time = common_start + (common_end - common_start) / 2
 
-    if isinstance(gain, float):
+    if isinstance(gain, dict):
+        pass  # Selector/epoch gains (or local fallback) were applied before merging.
+    elif isinstance(gain, float):
         for trace in stream:
             trace.data = trace.data / gain
     elif isinstance(gain[0], float):
@@ -776,11 +848,15 @@ def preprocess_picker_stream(
 
 def get_sta_dict(sta_file):
     """Read PAL station locations and time-invariant/time-varying gains."""
+    with open(sta_file, encoding="utf-8-sig") as fp:
+        rows = [row for row in csv.reader(fp) if row and not row[0].lstrip().startswith("#")]
+    if any(len(row[0].split(".")) > 2 or len(row) == 4 or len(row) > 9 for row in rows):
+        return read_inventory(sta_file)
     sta_dict = {}
     with open(sta_file) as fp:
         for line in fp:
             codes = [code.strip() for code in line.split(",")]
-            if not codes or not codes[0]:
+            if not codes or not codes[0] or codes[0].startswith("#"):
                 continue
             selector_parts = codes[0].split(".")
             if len(selector_parts) < 2:

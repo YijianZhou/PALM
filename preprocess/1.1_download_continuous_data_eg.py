@@ -13,11 +13,12 @@ from obspy.clients.fdsn.mass_downloader import (
 )
 
 from preprocess_common import (
+    selection_rank,
     active_epochs,
     compact_date,
     iter_days,
     normalized_location,
-    preferred_waveform_combinations,
+    preferred_waveform_combinations as _preferred_waveform_combinations,
     prune_waveform_combinations,
     read_station_epochs,
     resolve_path,
@@ -29,6 +30,7 @@ from preprocess_common import (
 # USER SETTINGS
 # ============================================================================
 CASE_CODE = "eg"
+station_selection_order = "channel_first"  # or location_first
 STATION_FILE = Path("output/station_%s.csv" % CASE_CODE)
 RAW_ROOT = Path("/data/ai_pal_%s_raw" % CASE_CODE)
 TIME_RANGE = "20190704-20190707"  # Exclusive end date.
@@ -42,6 +44,10 @@ OVERWRITE = False
 _STATIONS_PER_REQUEST = 100
 _DOWNLOAD_CHUNK_SIZE_MB = 20
 _REQUIRED_COMPONENTS = {"E", "N", "Z"}
+
+
+def preferred_waveform_combinations(combinations, locations, channels):
+    return _preferred_waveform_combinations(combinations, locations, channels, station_selection_order)
 
 
 def station_batches(stations):
@@ -131,23 +137,24 @@ def download_day(
     downloader, day, day_dir, stations, stationxml_dir, locations, bands
 ):
     combinations, _ = waveform_combinations(day_dir, stations)
-    unresolved = set(stations) - selected_complete_stations(
+    unresolved = set(stations) - selected_usable_stations(
         combinations, locations, bands
     )
     errors = []
 
-    for location in locations:
-        for band in bands:
-            if not unresolved:
-                return errors
-            errors.extend(download_attempt(
-                downloader, day, day_dir, stationxml_dir,
-                unresolved, location, band,
-            ))
-            combinations, _ = waveform_combinations(day_dir, stations)
-            unresolved -= selected_complete_stations(
-                combinations, locations, bands
-            )
+    attempts = sorted(((loc, band) for loc in locations for band in bands),
+        key=lambda item: selection_rank(item[1], item[0], bands, locations, station_selection_order))
+    for location, band in attempts:
+        if not unresolved:
+            return errors
+        errors.extend(download_attempt(
+            downloader, day, day_dir, stationxml_dir,
+            unresolved, location, band,
+        ))
+        combinations, _ = waveform_combinations(day_dir, stations)
+        unresolved -= selected_usable_stations(
+            combinations, locations, bands
+        )
     return errors
 
 

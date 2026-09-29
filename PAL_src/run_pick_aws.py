@@ -92,7 +92,9 @@ def load_raw_tail_cache(
     data_dict = cfg.get_data_dict(
         observed_date, active, s3_client,
         bucket=s3_bucket, root_prefix=s3_root_prefix,
-        location_priority=loc_priority,
+        location_priority=getattr(cfg, "location_priority", loc_priority),
+        channel_priority=getattr(cfg, "channel_priority", ("HH", "BH", "EH", "HN", "EN", "SH")),
+        station_selection_order=getattr(cfg, "station_selection_order", "channel_first"),
     )
     tails = {}
     for net_sta, records in sorted(data_dict.items()):
@@ -102,7 +104,7 @@ def load_raw_tail_cache(
                 acceleration_instrument_codes=acceleration_codes,
                 start_time=day_end - 2.0 * buffer_sec,
                 end_time=day_end,
-                to_prep=bool(getattr(cfg, "to_prep", True)),
+                to_clean=bool(getattr(cfg, "to_clean", getattr(cfg, "to_prep", True))),
             )
             tail = raw_tail(stream, day_end, buffer_sec)
             if tail:
@@ -159,7 +161,9 @@ def process_day(
     data_dict = cfg.get_data_dict(
         observed_date, active, s3_client,
         bucket=s3_bucket, root_prefix=s3_root_prefix,
-        location_priority=loc_priority,
+        location_priority=getattr(cfg, "location_priority", loc_priority),
+        channel_priority=getattr(cfg, "channel_priority", ("HH", "BH", "EH", "HN", "EN", "SH")),
+        station_selection_order=getattr(cfg, "station_selection_order", "channel_first"),
     )
     errors = []
     num_processed = 0
@@ -179,7 +183,7 @@ def process_day(
                 acceleration_instrument_codes=acceleration_codes,
                 start_time=day_start,
                 end_time=day_end,
-                to_prep=bool(getattr(cfg, "to_prep", True)),
+                to_clean=bool(getattr(cfg, "to_clean", getattr(cfg, "to_prep", True))),
             )
             next_tail = raw_tail(stream, day_end, buffer_sec)
             stream = merge_cached_tail(

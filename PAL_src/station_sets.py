@@ -1,5 +1,6 @@
 """Station-network selection helpers for AI-PAL association workflows."""
 from pathlib import Path
+from station_inventory import read_inventory
 
 
 def association_station_file_mapping(cfg, full_station_file, subnet_station_files):
@@ -54,13 +55,7 @@ def build_station_union(subnet_station_files, output_path):
                             station_file, line_number
                         )
                     )
-                previous = rows.get(selector)
-                if previous is not None and previous != text:
-                    raise ValueError(
-                        "conflicting rows for station selector {}: {!r} vs {!r}"
-                        .format(selector, previous, text)
-                    )
-                rows[selector] = text
+                rows[(selector, text)] = text
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -71,5 +66,6 @@ def build_station_union(subnet_station_files, output_path):
         ))
         for selector in sorted(rows):
             fp.write(rows[selector] + "\n")
+    read_inventory(partial)  # Validate epochs without dropping alternative rows.
     partial.replace(output_path)
     return output_path

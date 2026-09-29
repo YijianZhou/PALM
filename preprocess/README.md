@@ -44,7 +44,7 @@ DAILY_ROOT/
 
 Use `--` in filenames for a blank location code. Configure the PAL or AI-PAL
 `DATA_DIR` to point to `DAILY_ROOT`. Because this workflow has already selected
-and merged the components, use `to_prep = False`; choose `to_filter` separately
+and merged the components, use `to_clean = False`; choose `to_filter` separately
 according to whether these files have already received the model's configured
 frequency filter. The example merger preserves raw counts, so runtime gain and
 unit conversion still occur.
@@ -59,22 +59,16 @@ bounds, and the complete study interval before continuing.
 
 ### 0.2 Build the station file
 
-Edit and run `0.2_format_station_file_eg.py`. It groups metadata by `NET.STA`
-and divides each station history at all location and channel epoch boundaries.
-For every interval it first selects the preferred active location from
-`loc_codes`, then selects the preferred active channel band from `chn_codes`.
-This allows borehole locations to take priority over surface locations without
-changing the final `NET.STA.BAND.LOC` selector.
+Edit and run `0.2_format_station_file_eg.py`. It retains every configured
+band/location combination and splits each at component gain-epoch boundaries.
+The resulting inventory preserves actual fullfed operational periods; it does
+not choose a single preferred instrument, extend epochs, or fill temporal gaps.
+It writes:
 
-The script also normalizes gain epochs into one canonical station file.
-Internal gaps are divided at their temporal midpoint, while the first and last
-epochs are extended when necessary to cover `t_min` through `t_max`. It writes:
-
-- `output/station_eg.csv`: canonical station and gain epochs
-- `output/station_eg_metadata_audit.csv`: location and channel choices, missing
-  component gains, and duplicate components
-- `output/station_eg_gain_interval_audit.csv`: every extended boundary and
-  filled internal gap
+- `output/station_eg.csv`: complete band/location gain inventory
+- `output/station_eg_metadata_audit.csv`: component/gain choices and anomalies
+- `output/station_eg_gain_interval_audit.csv`: compatibility audit header; no
+  intervals are extended by this formatter
 
 When only one or two component gains exist, the formatter fills the absent gain
 with an available component gain and records that choice in the metadata audit.
@@ -85,12 +79,13 @@ by multiple cases.
 ### 1.1 Download raw daily waveforms
 
 Edit and run `1.1_download_continuous_data_eg.py`. It uses ObsPy
-`MassDownloader` and applies the same two-level priority as the station
-formatter: location first, then channel band. It searches for a complete E/N/Z
-combination first, then accepts a genuine single-component station when no
-complete combination exists. Two-component combinations are treated as
-incomplete data. Only one location-band combination is retained per `NET.STA`
-and day. `PROVIDERS` remains an ordered priority list,
+`MassDownloader` and applies configurable band/location priority:
+`station_selection_order = "channel_first"` by default, or `"location_first"`.
+Set the channel and location priority lists alongside it. It accepts a complete
+E/N/Z combination or a genuine single component in priority order, without
+ranking all three-component streams ahead of all single-component streams.
+Two-component combinations remain incomplete. Only one available location-band
+combination is retained per `NET.STA` and day. `PROVIDERS` remains an ordered priority list,
 and `NUM_WORKERS` controls the concurrent download threads per provider.
 Raw channel streams are stored under `RAW_ROOT/YYYYMMDD/`, while downloaded
 StationXML is reused from `RAW_ROOT/_stationxml/`.
@@ -104,27 +99,26 @@ raw files must be replaced.
 
 ### 1.2 Reconcile downloaded data and station gains
 
-Run `1.2_reconcile_station_file_eg.py` after downloading. It checks that every
-retained `NET.STA` daily waveform combination has matching, continuous gain
-coverage in `output/station_eg.csv`. When the downloaded location or band
-differs from the metadata-preferred choice, the script reconstructs that day
-from the matching fullfed component gains and updates only the affected station
-interval. If the exact downloaded selector has no overlapping fullfed epoch,
-its nearest available fullfed gain epoch is used and identified in the audit.
+This step is optional with the complete inventory. By default,
+`UPDATE_STATION_FILE = False`: run `1.2_reconcile_station_file_eg.py` to audit
+actual waveform selectors against time-dependent gain coverage without rewriting
+the station file or deleting alternative waveforms. Findings are written to
+`output/station_eg_download_reconciliation.csv`. Missing coverage means the
+fullfed inventory should be regenerated or corrected, not silently extended.
+`NUM_WORKERS` controls concurrent daily header scans.
 
-The original station file is preserved once as
-`output/station_eg_before_download_reconciliation.csv`. All checks, updates,
-unresolved metadata, incomplete components, and removed non-selected waveform
-files are recorded in `output/station_eg_download_reconciliation.csv`.
-`NUM_WORKERS` controls concurrent daily miniSEED-header scans; reduce it if the
-archive server becomes I/O saturated.
+The opt-in `UPDATE_STATION_FILE` repair mode is retained for old single-selector
+inventories only. It can replace affected station-day intervals and borrow the
+nearest exact-selector epoch, with audit and backup output. Do not use that
+legacy mode to maintain a complete multi-selector inventory.
 
 ### 2 Validate and merge the raw data
 
 Edit and run `2_merge_raw_data_eg.py`. This is the publication step. It applies
 the same structural safeguards used by the AWS PAL reader:
 
-1. Select only the requested network, station, location, band, and component.
+1. Select one available band/location per station-day using the configured
+   `station_selection_order` and channel/location priorities.
 2. Accept either one component or a complete E/N/Z set, preferring lettered
    orientations over `1/2/3` alternatives.
 3. Reject components with excessive miniSEED fragmentation.
@@ -133,7 +127,8 @@ the same structural safeguards used by the AWS PAL reader:
 5. Interpolate fragments to the sampling rate of the longest fragment.
 6. Merge the fragments, fill gaps with zero, and require exactly one trace.
 7. Trim to the exact UTC day and reject empty, NaN, or infinite output.
-8. Enforce the single location-band selector reconciled for that station-day.
+8. Publish only the selected combination, leaving the complete gain inventory
+   unchanged. No post-merge station-file rewrite is required.
 
 Only accepted streams are written to `CLEAN_ROOT`. Missing components, rejected
 streams, unreadable files, selected fallbacks, and coverage ratios are recorded
@@ -179,3 +174,7 @@ can be overlaid by setting `CATALOG_FILE` and its latitude/longitude columns.
   provider, and FDSN services may throttle aggressive parallel requests.
 - Rerunning a script with `OVERWRITE = False` preserves published files and is
   the normal recovery path after interruption.
+
+See [station formats](../STATION_FORMATS.md) for runtime gain matching and
+compatibility with simplified station files. Keep selection settings consistent
+across downloader, merger, and inference.

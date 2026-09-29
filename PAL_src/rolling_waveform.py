@@ -54,7 +54,11 @@ def merge_cached_tail(current, previous_tail, start_time, end_time):
                 )
             pieces += previous_trace
         pieces += current_trace
+        gain_missing = any(tr.stats.get('gain_missing', False) for tr in pieces)
         pieces.merge(method=1, fill_value=0)
+        if gain_missing:
+            for trace in pieces:
+                trace.stats.gain_missing = True
         if len(pieces) != 1:
             return Stream()
         pieces[0].trim(

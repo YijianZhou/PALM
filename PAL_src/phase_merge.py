@@ -2,7 +2,7 @@
 
 import csv
 from datetime import datetime, timedelta
-from math import cos, hypot, pi
+from math import cos, hypot, pi, isfinite
 from pathlib import Path
 from statistics import median
 
@@ -79,6 +79,12 @@ def median_time(values):
 def median_valid(values, default=-1.0):
     valid = [float(value) for value in values if float(value) >= 0]
     return median(valid) if valid else default
+
+
+def median_magnitude(values):
+    """Magnitudes may be negative; only nonfinite values are unavailable."""
+    valid = [float(value) for value in values if isfinite(float(value))]
+    return median(valid) if valid else float("nan")
 
 
 def horizontal_distance_km(left, right):
@@ -397,7 +403,7 @@ def merge_group(events, phase_pick_tol=1.0):
         "lat": median([event["lat"] for event in events]),
         "lon": median([event["lon"] for event in events]),
         "depth": median([event["depth"] for event in events]),
-        "mag": median_valid([event["mag"] for event in events]),
+        "mag": median_magnitude([event["mag"] for event in events]),
         "picks": picks,
         "num_input_events": len(events),
         "sources": sorted({event["source"] for event in events}),

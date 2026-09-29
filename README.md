@@ -1,5 +1,11 @@
 # PALM
 
+See [Station File Formats](STATION_FORMATS.md) for supported schemas,
+workflow-specific restrictions, and the station filenames used by launchers.
+
+Current release preparation: **v5.0**. See the [changelog](CHANGELOG.md)
+for major changes since v4.1.
+
 Phase Picking, Association, Location, and Matched Filter workflow for building
 high-resolution earthquake catalogs. PAL or AI-PAL detections can provide the
 event templates used by the matched-filter (MFT) stage.
@@ -45,14 +51,8 @@ For a local example:
 
 ```bash
 cd 1_run_pal/run_pal_local
-python 1_run_pal_pick_assoc_eg.py
-```
-
-The split workflow runs the same scientific implementation:
-
-```bash
-python 2.1_run_pal_pick_eg.py
-python 2.2_run_pal_assoc_eg.py
+python 1_run_pal_pick_eg.py
+python 2_run_pal_assoc_eg.py
 ```
 
 ## 2. AI-PAL-Enriched Template Workflow

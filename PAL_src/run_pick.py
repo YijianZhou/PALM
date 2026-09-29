@@ -52,7 +52,7 @@ def _write_ownership(pick_path, buffer_sec):
 
 def run_pick(
     time_range, data_dir, sta_file, out_pick_dir, cfg, overwrite=False,
-    num_workers=1,
+    num_workers=1, progress_callback=None,
 ):
     get_data_dict = cfg.get_data_dict
     read_data = cfg.read_data
@@ -80,6 +80,9 @@ def run_pick(
     os.makedirs(out_pick_dir, exist_ok=True)
     start_date, end_date = [UTCDateTime(date) for date in time_range.split("-")]
     num_days = (end_date.date - start_date.date).days
+    def progress(state, day=None, stations=0, total_stations=None):
+        if progress_callback is not None:
+            progress_callback(state, str(day) if day is not None else "-", stations, total_stations)
     buffer_sec = float(getattr(cfg, "data_buffer_sec", 0.0))
     num_workers = max(1, int(num_workers))
     if buffer_sec < 0:
@@ -110,7 +113,8 @@ def run_pick(
                 normalize_to_three_channels=getattr(
                     cfg, "normalize_to_three_channels", True
                 ),
-                to_prep=bool(getattr(cfg, "to_prep", True)),
+                to_clean=bool(getattr(cfg, "to_clean", getattr(cfg, "to_prep", True))),
+                station_selection_order=getattr(cfg, "station_selection_order", "channel_first"),
                 location_priority=getattr(
                     cfg, "location_priority", ("10", "20", "01", "02", "00", "")
                 ),
@@ -123,11 +127,13 @@ def run_pick(
                 tails[net_sta] = tail
         return tails
 
-    previous_raw_tails = load_day_tail(start_date - 86400)
+    # None means context must be loaded; an empty dict is a valid cached tail.
+    previous_raw_tails = None
     print("run pick: raw_waveform --> picks")
     print("time range: {} to {}".format(start_date.date, end_date.date))
     for day_idx in range(num_days):
         date = start_date + day_idx * 86400
+        progress("starting day", date.date)
         pick_path = os.path.join(out_pick_dir, "{}.pick".format(date.date))
         count_path = trigger_count_path(out_pick_dir, date.date)
         if (
@@ -137,8 +143,13 @@ def run_pick(
             and _has_current_ownership(pick_path, buffer_sec)
         ):
             print("skip existing picks: {}".format(pick_path))
-            previous_raw_tails = load_day_tail(date)
+            previous_raw_tails = None
+            progress("skipped", date.date)
             continue
+        if previous_raw_tails is None:
+            if buffer_sec > 0:
+                progress("loading previous-day context", date.date)
+            previous_raw_tails = load_day_tail(date - 86400)
         if count_path.exists():
             count_path.unlink()
 
@@ -165,6 +176,7 @@ def run_pick(
             station_counts = {}
             next_raw_tails = {}
             items = sorted(data_dict.items())
+            progress("picking", date.date, 0, len(items))
 
             def process_station(item):
                 net_sta, data_paths = item
@@ -173,7 +185,8 @@ def run_pick(
                     start_time=day_start,
                     end_time=day_end,
                     normalize_to_three_channels=normalize_to_three_channels,
-                    to_prep=bool(getattr(cfg, "to_prep", True)),
+                    to_clean=bool(getattr(cfg, "to_clean", getattr(cfg, "to_prep", True))),
+                    station_selection_order=getattr(cfg, "station_selection_order", "channel_first"),
                     location_priority=getattr(
                         cfg, "location_priority",
                         ("10", "20", "01", "02", "00", ""),
@@ -221,6 +234,7 @@ def run_pick(
                         ) = result
                         out_pick.write(station_output)
                         station_counts[net_sta] = (num_triggers, num_picks)
+                        progress("picking", date.date, index, len(items))
                         if next_tail:
                             next_raw_tails[net_sta] = next_tail
                         if (
@@ -240,6 +254,7 @@ def run_pick(
             write_trigger_counts(out_pick_dir, date.date, station_counts)
             _write_ownership(pick_path, buffer_sec)
             previous_raw_tails = next_raw_tails
+            progress("completed", date.date, len(items), len(items))
         except Exception:
             if os.path.exists(partial_path):
                 os.remove(partial_path)

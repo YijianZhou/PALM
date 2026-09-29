@@ -18,10 +18,11 @@ class Config(object):
     self.amp_ratio_thres = [6,10,3]  # max amp ratio for Peak, P/P_tail, & P/S
     self.amp_win    = [1.,5.]        # time win to get S amplitude
     self.det_gap    = 5.             # time gap between detections
-    self.to_prep    = False          # local archive is prepared by preprocess/
+    self.to_clean    = False          # local archive is prepared by preprocess/
     self.to_filter  = True           # apply freq_band before PAL picking
     self.location_priority = ["10", "20", "01", "02", "00", ""]
     self.channel_priority = ["HH", "BH", "EH", "HN", "EN", "SH"]
+    self.station_selection_order = "channel_first"  # or "location_first"
     self.freq_band  = [1,20]         # frequency band
     self.data_buffer_sec = 60.0      # rolling unfiltered edge context
     self.station_log_interval = 50
@@ -31,6 +32,7 @@ class Config(object):
     self.picker_vp   = 5.9
     self.picker_vs   = 3.45
     # 2. associator params
+    self.association_buffer_sec = 30.0  # Pick overlap on each side of the owned interval.
     self.subnet_assoc_params = {
         "default": {
             "min_sta": 4, "ot_dev": 1.4, "max_res": 1.2, "max_drop": 1,

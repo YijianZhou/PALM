@@ -5,7 +5,54 @@ procedure are in [CHANGELOG_INTERNAL.md](CHANGELOG_INTERNAL.md).
 
 ## Unreleased
 
-No changes recorded after the v5.0 release baseline.
+- Missing instrument gains no longer remove arrival-time picks. Same-band
+  location/epoch fallback is allowed; no cross-band gain borrowing. Uncalibrated
+  amplitudes are nan and excluded from event magnitude.
+
+- 2026-09-24: PAL amplitude QC no longer crashes on incomplete component
+  windows. Unavailable checks are recorded as `nan` and bypassed; available
+  failing checks still reject picks.
+
+- Local picking exposes `threads_per_worker` for native numerical libraries,
+  matching the AWS control; example launchers default to 2.
+
+- Local PAL picking now uses independent date-block processes instead of
+  station threads. Worker count controls date blocks; daily outputs and resume
+  checks are unchanged, with per-block logs and aggregate console progress.
+
+- Simplified local PAL entry points to `1_run_pal_pick_eg.py` and
+  `2_run_pal_assoc_eg.py`; removed the redundant combined launcher.
+
+- Local picking resumes without reading waveform tails for every skipped day;
+  previous-day context is loaded only when picking actually resumes.
+
+- Fixed daily trigger-count ownership at buffered boundaries: pre-QC candidates
+  now use refined P time like accepted picks, avoiding false count failures.
+
+- Local picking retains waveforms with missing gain locations/epochs, using
+  warned same-band gain fallback or uncalibrated counts as a last resort.
+
+- Local PAL picking now prints live day/station progress and a 30-second
+  heartbeat while retaining detailed output in a line-buffered log.
+
+- Daily PAL association now shares buffered picks across all subnets inside
+  parallel contiguous date blocks, eliminating per-subnet pick-file rereads.
+
+- PAL configs explicitly use a 30 s association buffer. Local PAL examples
+  now enable cross-day association and pick halos, with bounded per-worker
+  daily pick caching. Association resumes detect buffer-policy changes.
+
+- Renamed PAL raw-waveform cleaning control to `to_clean`; legacy `to_prep`
+  configs and reader calls remain supported. Filtering is unchanged.
+
+- Unified configurable band/location selection (band first by default) and
+  fullfed-derived, time-dependent `NET.STA.BAND.LOC` gain inventories across
+  local and AWS PAL, AI-PAL realtime, and PALM MFT. Simplified files remain
+  supported; routine post-merge station-file reconciliation is unnecessary.
+
+- Fixed PAL event merging that discarded valid negative magnitudes. Missing
+  magnitudes now use `nan`, not the physically valid value -1. Existing
+  affected catalogs require magnitude recalculation; they are not auto-repaired.
 
 ## v5.0 - Release Preparation
 

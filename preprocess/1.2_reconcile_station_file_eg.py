@@ -14,7 +14,7 @@ from preprocess_common import (
     component_code,
     iter_days,
     normalized_location,
-    preferred_waveform_combinations,
+    preferred_waveform_combinations as _preferred_waveform_combinations,
     prune_waveform_combinations,
     resolve_path,
     waveform_combinations,
@@ -25,6 +25,8 @@ from preprocess_common import (
 # USER SETTINGS
 # ============================================================================
 CASE_CODE = "eg"
+UPDATE_STATION_FILE = False  # Optional legacy migration; default is read-only audit.
+station_selection_order = "channel_first"  # or location_first
 STATION_FILE = Path("output/station_%s.csv" % CASE_CODE)
 FULLFED_TEMPLATE = "input/station_{}.fullfed"
 RAW_ROOT = Path("/data/ai_pal_%s_raw" % CASE_CODE)
@@ -37,6 +39,10 @@ NUM_WORKERS = 8  # Concurrent daily header scans on the waveform archive.
 
 
 _REQUIRED_COMPONENTS = {"E", "N", "Z"}
+
+
+def preferred_waveform_combinations(combinations, locations, channels):
+    return _preferred_waveform_combinations(combinations, locations, channels, station_selection_order)
 
 
 def selector_parts(value):
@@ -386,7 +392,7 @@ def scan_waveform_day(day_start, raw_root):
     selected = preferred_waveform_combinations(
         combinations, loc_codes, chn_codes
     )
-    removed = prune_waveform_combinations(combinations, selected)
+    removed = []  # Auditing never deletes downloaded alternatives.
     choices = []
     for net_sta, (key, details) in selected.items():
         choices.append((net_sta, key, set(details["components"])))
@@ -410,7 +416,7 @@ def main():
     networks = sorted({row["net"].lower() for row in station_rows})
     fullfed_records = read_fullfed_records(
         Path(FULLFED_TEMPLATE.format(network)) for network in networks
-    )
+    ) if UPDATE_STATION_FILE else {}
     audit_rows = []
     replacements = defaultdict(list)
     station_rows_by_net_sta = defaultdict(list)
@@ -452,10 +458,12 @@ def main():
                 message = "expected one component or E/N/Z"
             elif (
                 covers_day(exact_rows, day_start, day_end)
-                and set(previous) == {selector}
             ):
                 status = "covered"
                 message = ""
+            elif not UPDATE_STATION_FILE:
+                status = "missing_metadata"
+                message = "regenerate complete inventory from fullfed; station file unchanged"
             else:
                 replacement, used_nearest = fullfed_day_rows(
                     key, fullfed_records, day_start, day_end

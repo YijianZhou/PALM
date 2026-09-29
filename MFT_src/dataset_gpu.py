@@ -290,6 +290,17 @@ def normalize_stream_channels(stream):
 
 
 def read_stream(st_paths, gain=None, start_time=None, end_time=None):
+    from pathlib import Path
+    import data_pipeline as dp
+    if not st_paths:
+        return []
+    station = '.'.join(Path(st_paths[0]).name.split('.')[:2])
+    selection = dict(channel_priority=getattr(cfg, 'channel_priority', dp.DEFAULT_CHANNEL_PRIORITY),
+        location_priority=getattr(cfg, 'location_priority', dp.DEFAULT_LOCATION_PRIORITY),
+        station_selection_order=getattr(cfg, 'station_selection_order', 'channel_first'))
+    if gain is not None:
+        return dp.read_data(st_paths, {station: [0, 0, 0, gain]},
+            start_time=start_time, end_time=end_time, **selection)
     # Daily files are already cleaned. Only stitch adjacent published days.
     read_kwargs = {}
     if start_time is not None: read_kwargs['starttime'] = start_time
@@ -312,24 +323,7 @@ def read_stream(st_paths, gain=None, start_time=None, end_time=None):
             raise ValueError('gap or conflicting overlap across daily files')
     except Exception as exc:
         print('bad archived data: {}'.format(exc)); return []
-    if len(st) != 3:
-        st = normalize_stream_channels(st)
-    if not gain: return st
-    # remove gain
-    start_time = max([tr.stats.starttime for tr in st])
-    end_time = min([tr.stats.endtime for tr in st])
-    st_time = start_time + (end_time-start_time)/2
-    # if format 1: same gain for 3-chn & time invariant
-    if type(gain)==float:
-        for ii in range(3): st[ii].data = st[ii].data / gain
-    # if format 2: different gain for 3-chn & time invariant
-    elif type(gain[0])==float:
-        for ii in range(3): st[ii].data = st[ii].data / gain[ii]
-    # format 3: different gain for 3-chn & time variant
-    elif type(gain[0])==list:
-        for [ge,gn,gz,t0,t1] in gain:
-            if t0<st_time<t1: break
-        for ii in range(3): st[ii].data = st[ii].data / [ge,gn,gz][ii]
+    st, _ = dp.prepare_local_stream(st, station, **selection)
     return st
 
 def trim_stream(stream, start_time, end_time, allow_left_padding=False):

@@ -2,6 +2,9 @@
 
 import contextlib
 import traceback
+import sys
+import time
+from threading import Event, Lock, Thread
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -15,6 +18,54 @@ def parse_date_range(time_range):
     return start, end
 
 
+class _LocalPickProgress:
+    """Report to the original console, independently of redirected station logs."""
+    def __init__(self, stream, total_days):
+        self.stream, self.total_days = stream, total_days
+        self.completed = self.skipped = 0
+        self.state, self.day, self.stations, self.total_stations = "initializing", "-", 0, None
+        self.started = time.monotonic()
+        self.lock, self.stop = Lock(), Event()
+        self.thread = Thread(target=self._heartbeat, daemon=True)
+
+    def __enter__(self):
+        self.thread.start()
+        self.report()
+        return self
+
+    def update(self, state, day, stations, total_stations):
+        with self.lock:
+            self.state, self.day = state, day
+            self.stations, self.total_stations = stations, total_stations
+            self.completed += state == "completed"
+            self.skipped += state == "skipped"
+        if state in ("completed", "skipped"):
+            self.report()
+
+    def report(self):
+        with self.lock:
+            print("[progress] {} | PAL picking | days {}/{} (completed={} skipped={}) | "
+                  "date={} | {} | stations={}/{} | elapsed {:.0f}s".format(
+                      datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                      self.completed + self.skipped, self.total_days,
+                      self.completed, self.skipped, self.day, self.state,
+                      self.stations, self.total_stations if self.total_stations is not None else "?",
+                      time.monotonic() - self.started),
+                  file=self.stream, flush=True)
+
+    def _heartbeat(self):
+        while not self.stop.wait(30):
+            self.report()
+
+    def __exit__(self, exc_type, exc, tb):
+        self.stop.set()
+        self.thread.join()
+        if exc_type is not None:
+            with self.lock:
+                self.state = "FAILED: {}".format(exc)
+            self.report()
+
+
 def run_parallel_local_pick(
     time_range,
     data_dir,
@@ -25,8 +76,9 @@ def run_parallel_local_pick(
     config_factory,
     overwrite=False,
     include_association_halo=False,
+    threads_per_worker=1,
 ):
-    """Process dates sequentially and stations concurrently within each date."""
+    """Process contiguous date blocks independently, with serial stations."""
     from run_pick import run_pick
 
     start, end = parse_date_range(time_range)
@@ -40,16 +92,31 @@ def run_parallel_local_pick(
     log_dir = Path(log_dir).resolve()
     pick_dir.mkdir(parents=True, exist_ok=True)
     log_dir.mkdir(parents=True, exist_ok=True)
+    threads_per_worker = int(threads_per_worker)
+    if threads_per_worker < 1:
+        raise ValueError("threads_per_worker must be positive")
+    if int(num_workers) > 1 or threads_per_worker != 1:
+        from local_pick_blocks import run_blocks
+        print("PAL picking: {} date-block processes | one station at a time per process".format(
+            min(int(num_workers), (end - start).days)), flush=True)
+        print("Native numerical threads per worker: {}".format(threads_per_worker), flush=True)
+        with _LocalPickProgress(sys.stdout, (end - start).days) as progress:
+            run_blocks(start, end, num_workers, data_dir, station_file, pick_dir,
+                       log_dir, config_factory, overwrite, progress,
+                       threads_per_worker=threads_per_worker)
+        print("PAL picking completed: {}".format(time_range))
+        return
     run_range = "{}-{}".format(
         start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
     )
     log_path = log_dir / "pick_{}.log".format(run_range)
     print(
-        "PAL picking: sequential days | {} station workers | log {}".format(
+        "PAL picking: sequential days | {} station worker | log {}".format(
             max(1, int(num_workers)), log_path
         )
     )
-    with log_path.open("w", encoding="utf-8") as log_fp:
+    with _LocalPickProgress(sys.stdout, (end - start).days) as progress, \
+            log_path.open("w", encoding="utf-8", buffering=1) as log_fp:
         with contextlib.redirect_stdout(log_fp), contextlib.redirect_stderr(log_fp):
             try:
                 run_pick(
@@ -60,6 +127,7 @@ def run_parallel_local_pick(
                     config_factory(),
                     overwrite=bool(overwrite),
                     num_workers=num_workers,
+                    progress_callback=progress.update,
                 )
             except BaseException:
                 print("\nFATAL PAL PICK ERROR", flush=True)

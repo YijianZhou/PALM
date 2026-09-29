@@ -1,8 +1,12 @@
 """Shared contracts for the example continuous-waveform preparation tools."""
 
 import csv
+import sys
 from collections import defaultdict
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'PAL_src'))
+from station_inventory import selection_rank
 
 from obspy import UTCDateTime, read
 
@@ -133,7 +137,7 @@ def priority_rank(value, priorities):
 
 
 def preferred_waveform_combinations(
-    combinations, location_priority, channel_priority
+    combinations, location_priority, channel_priority, station_selection_order="channel_first"
 ):
     """Select one three- or single-component combination per station."""
     by_station = defaultdict(list)
@@ -142,10 +146,8 @@ def preferred_waveform_combinations(
 
     selected = {}
     for net_sta, candidates in by_station.items():
-        ordered = sorted(candidates, key=lambda item: (
-            priority_rank(item[0][2], location_priority),
-            priority_rank(item[0][3], channel_priority),
-        ))
+        ordered = sorted(candidates, key=lambda item: selection_rank(
+            item[0][3], item[0][2], channel_priority, location_priority, station_selection_order))
         complete = [
             item for item in ordered
             if item[1]["components"] == {"E", "N", "Z"}
@@ -153,9 +155,8 @@ def preferred_waveform_combinations(
         single = [
             item for item in ordered if len(item[1]["components"]) == 1
         ]
-        selected[net_sta] = (
-            complete[0] if complete else single[0] if single else ordered[0]
-        )
+        usable = [item for item in ordered if item in complete or item in single]
+        selected[net_sta] = usable[0] if usable else ordered[0]
     return selected
 
 

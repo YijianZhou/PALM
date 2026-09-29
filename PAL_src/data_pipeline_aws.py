@@ -16,6 +16,7 @@ import numpy as np
 from botocore import UNSIGNED
 from botocore.config import Config as BotoConfig
 from obspy import Stream, UTCDateTime, read
+from station_inventory import read_inventory, selection_rank, calibrate_trace, CHANNEL_PRIORITY
 
 
 WAVEFORM_NAME = re.compile(
@@ -37,7 +38,7 @@ def _as_date(value):
 
 
 def _component(channel):
-    return {"1": "E", "2": "N"}.get(channel[-1], channel[-1])
+    return {"1": "E", "2": "N", "3": "Z"}.get(channel[-1], channel[-1])
 
 
 def _normalize_location(value):
@@ -47,67 +48,26 @@ def _normalize_location(value):
 
 @lru_cache(maxsize=8)
 def _load_station_epochs(station_file):
-    epochs = defaultdict(list)
-    path = Path(station_file).expanduser().resolve()
-    with path.open(newline="", encoding="utf-8-sig") as fp:
-        for line_number, row in enumerate(csv.reader(fp), start=1):
-            if not row or row[0].lstrip().startswith("#"):
-                continue
-            if len(row) != 9:
-                raise ValueError(
-                    f"{path}:{line_number}: expected 9 PAL fields, got {len(row)}"
-                )
-            codes = row[0].strip().split(".")
-            if len(codes) != 3:
-                raise ValueError(
-                    f"{path}:{line_number}: first field must be NET.STA.BAND"
-                )
-            net, sta, band = codes
-            start, end = _as_date(row[7]), _as_date(row[8])
-            if start >= end:
-                raise ValueError(f"{path}:{line_number}: t0 must be before t1")
-            epoch = {
-                "net": net,
-                "sta": sta,
-                "net_sta": f"{net}.{sta}",
-                "band": band,
-                "latitude": float(row[1]),
-                "longitude": float(row[2]),
-                "elevation": float(row[3]),
-                "gains": tuple(float(value) for value in row[4:7]),
-                "start": start,
-                "end": end,
-            }
-            epochs[epoch["net_sta"]].append(epoch)
+    return read_inventory(station_file)
 
-    for net_sta in epochs:
-        epochs[net_sta].sort(key=lambda item: (item["start"], item["end"]))
-    return dict(epochs)
 
 
 def get_sta_dict_aws(station_file, when):
-    """Return active NET.STA metadata selected from NET.STA.BAND epochs.
-
-    Intervals use the same half-open convention as the station file: t0 <= day < t1.
-    """
-    observed_date = _as_date(when)
+    """Return station identities with all metadata alternatives active that day."""
+    day = float(UTCDateTime(str(_as_date(when))))
     active = {}
-    for net_sta, epochs in _load_station_epochs(str(Path(station_file).resolve())).items():
-        matches = [
-            epoch for epoch in epochs
-            if epoch["start"] <= observed_date < epoch["end"]
-        ]
-        if len(matches) > 1:
-            descriptions = ", ".join(
-                f"{item['band']}:{item['start']}/{item['end']}" for item in matches
-            )
-            raise ValueError(
-                f"overlapping active station epochs for {net_sta} on "
-                f"{observed_date}: {descriptions}"
-            )
-        if matches:
-            active[net_sta] = matches[0]
+    for net_sta, info in _load_station_epochs(str(Path(station_file).resolve())).items():
+        epochs = [e for e in info[3]['epochs'] if e['start'] < day + 86400 and e['end'] > day]
+        if not epochs:
+            continue
+        first = epochs[0]
+        net, sta = net_sta.split('.')
+        active[net_sta] = dict(net=net, sta=sta, net_sta=net_sta,
+            band=first['band'], latitude=info[0], longitude=info[1], elevation=info[2],
+            gains=first['gains'], start=day, end=day + 86400,
+            inventory=info[3])
     return active
+
 
 
 def to_associator_sta_dict(active_sta_dict):
@@ -168,8 +128,10 @@ def get_data_dict_aws(
     bucket="scedc-pds",
     root_prefix="continuous_waveforms",
     location_priority=("10", "20", "01", "02", "00", "--"),
+    channel_priority=CHANNEL_PRIORITY,
+    station_selection_order="channel_first",
 ):
-    """List one SCEDC day and select the requested band for active stations.
+    """List one SCEDC day and rank available band/location combinations.
 
     Values contain exactly three E/N/Z objects, or one selected object marked
     for three-component expansion. One- and two-component groups use the
@@ -190,19 +152,17 @@ def get_data_dict_aws(
             record = _parse_key(item["Key"])
             if record is None or record["net_sta"] not in active_sta_dict:
                 continue
-            if record["band"] != active_sta_dict[record["net_sta"]]["band"]:
-                continue
-            grouped[record["net_sta"]][record["location"]][record["component"]].append(
+            grouped[record["net_sta"]][(record["band"], record["location"])][record["component"]].append(
                 record
             )
 
     selected = {}
     for net_sta, by_location in grouped.items():
-        # Match the inventory selector: choose location first, then use that
-        # location's selected band. Do not fall through to a different location.
+        # Selection is independent of the preferred band in legacy metadata.
         location = min(
             by_location,
-            key=lambda value: _location_rank(value, tuple(location_priority)),
+            key=lambda value: selection_rank(value[0], value[1], channel_priority,
+                                               location_priority, station_selection_order),
         )
         by_component = by_location[location]
         components = set(by_component)
@@ -289,7 +249,8 @@ def _validate_mseed_fragments(stream, target_rate, source):
             )
         )
 
-def _read_s3_trace(record, s3_client, bucket):
+def _read_s3_trace(record, s3_client, bucket, inventory=None,
+                   start_time=None, end_time=None):
     body = s3_client.get_object(Bucket=bucket, Key=record["key"])["Body"].read()
     stream = read(io.BytesIO(body), format="MSEED")
     matching = Stream(
@@ -303,6 +264,14 @@ def _read_s3_trace(record, s3_client, bucket):
     )
     if not matching:
         matching = stream
+    if start_time is not None or end_time is not None:
+        matching.trim(
+            UTCDateTime(start_time) if start_time is not None else None,
+            UTCDateTime(end_time) if end_time is not None else None,
+            nearest_sample=True,
+        )
+    if not matching:
+        return None
     target_trace = max(
         matching,
         key=lambda trace: float(trace.stats.endtime - trace.stats.starttime),
@@ -314,8 +283,14 @@ def _read_s3_trace(record, s3_client, bucket):
         "s3://{}/{}".format(bucket, record["key"]),
     )
     for trace in matching:
+        if inventory is not None:
+            calibrate_trace(trace, inventory, allow_fallback=True)
         _interpolate_trace(trace, target_rate)
+    gain_missing = any(tr.stats.get('gain_missing', False) for tr in matching)
     matching.merge(method=1, fill_value=0)
+    if gain_missing:
+        for trace in matching:
+            trace.stats.gain_missing = True
     if len(matching) != 1:
         raise ValueError(
             f"expected one merged trace in s3://{bucket}/{record['key']}, "
@@ -332,17 +307,24 @@ def read_data_aws(
     acceleration_instrument_codes=("N",),
     start_time=None,
     end_time=None,
-    to_prep=True,
+    to_clean=None,
+    *, to_prep=None,
 ):
     """Merge adjacent daily S3 components and convert counts to velocity."""
-    if not to_prep:
-        raise ValueError("raw SCEDC waveform objects require to_prep=True")
+    if to_clean is None:
+        to_clean = True if to_prep is None else to_prep
+    if not to_clean:
+        raise ValueError("raw SCEDC waveform objects require to_clean=True")
     if not records:
         return Stream()
 
     by_component = defaultdict(list)
     for record in records:
-        trace = _read_s3_trace(record, s3_client, bucket)
+        trace = _read_s3_trace(record, s3_client, bucket,
+            inventory=station_metadata.get("inventory"),
+            start_time=start_time, end_time=end_time)
+        if trace is None:
+            continue
         if start_time is not None or end_time is not None:
             trace.trim(
                 UTCDateTime(start_time) if start_time is not None else trace.stats.starttime,
@@ -399,14 +381,15 @@ def read_data_aws(
             raise ValueError(
                 "invalid gain for {}: {}".format(station_metadata["net_sta"], gain)
             )
-        trace.data = np.asarray(trace.data, dtype=np.float64) / gain
-        if station_metadata["band"][1:2] in acceleration_instrument_codes:
+        if "inventory" not in station_metadata:
+            trace.data = np.asarray(trace.data, dtype=np.float64) / gain
+        if trace.stats.channel[1:2] in acceleration_instrument_codes:
             trace.detrend("demean").detrend("linear")
             trace.integrate(method="cumtrapz")
             trace.detrend("linear")
         trace.stats.network = station_metadata["net"]
         trace.stats.station = station_metadata["sta"]
-        trace.stats.channel = station_metadata["band"] + component
+        trace.stats.channel = trace.stats.channel[:2] + component
         output += trace
     return output
 

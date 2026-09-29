@@ -289,7 +289,7 @@ class PS_Pair_Assoc(object):
     if len(mag) >= 3:
         mag_dev = abs(mag - np.median(mag))
         mag = np.delete(mag, np.argmax(mag_dev))
-    event_loc['mag'] = round(float(np.median(mag)),2) if len(mag) else -1.0
+    event_loc['mag'] = round(float(np.median(mag)),2) if len(mag) else float("nan")
     return event_loc
 
   def write_catalog(self, event_loc, out_ctlg):
@@ -297,7 +297,7 @@ class PS_Pair_Assoc(object):
     lon = event_loc['evt_lon']
     lat = event_loc['evt_lat']
     dep = event_loc['evt_dep']
-    mag = event_loc['mag'] if 'mag' in event_loc else -1
+    mag = event_loc['mag'] if 'mag' in event_loc else float("nan")
     out_ctlg.write('{},{:.5f},{:.5f},{:.1f},{:.2f}\n'.format(format_assoc_time(ot), lat, lon, dep, mag))
 
   def write_phase(self, event_loc, event_pick, out_pha):

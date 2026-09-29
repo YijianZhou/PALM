@@ -1,4 +1,4 @@
-"""Run parallel independent-day PAL picking and association."""
+"""Run parallel PAL picking followed by buffered daily association."""
 
 import argparse
 from pathlib import Path
@@ -34,7 +34,7 @@ def main():
         num_workers=args.num_pick_workers,
         config_factory=config_pal.Config,
         overwrite=args.overwrite,
-        include_association_halo=False,
+        include_association_halo=True,
     )
     run_buffered_association(
         subnet_station_files={"full": args.sta_file},
@@ -44,7 +44,7 @@ def main():
         num_workers=args.num_assoc_workers,
         config_factory=config_pal.Config,
         overwrite=args.overwrite,
-        association_buffer_enabled=False,
+        association_buffer_enabled=True,
         output_catalog=args.out_ctlg,
         output_phase=args.out_pha,
     )

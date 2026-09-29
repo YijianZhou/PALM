@@ -140,11 +140,13 @@ class STA_LTA_Kurtosis(object):
         # refine initial pick on waveform
         tp_idx = tp0_idx - self.find_second_peak(data_p[0:tp0_idx-p_idx0][::-1])
         tp = start_time + tp_idx/samp_rate
-        trigger_time = start_time + trig_idx/samp_rate
-        if (
-            (pick_start_time is None or trigger_time >= pick_start_time)
-            and (pick_end_time is None or trigger_time < pick_end_time)
-        ):
+        # Count pre-QC candidates in the same ownership interval as picks.
+        # Refining P can move it across a boundary relative to the trigger.
+        in_target_day = (
+            (pick_start_time is None or tp >= pick_start_time)
+            and (pick_end_time is None or tp < pick_end_time)
+        )
+        if in_target_day:
             num_triggers += 1
         # 2.2 pick S 
         # 2.2.1 pca for amp_peak
@@ -208,24 +210,14 @@ class STA_LTA_Kurtosis(object):
         ts = start_time + ts_idx/samp_rate if ts_idx>tp_idx else start_time + ts0_idx/samp_rate
         # 3. get related S amplitude
         data_amp = st_data[:, tp_idx-amp_win_npts[0] : ts_idx+amp_win_npts[1]].copy()
-        s_amp = self.get_s_amp(data_amp, samp_rate)
+        s_amp = (float('nan') if any(tr.stats.get('gain_missing', False) for tr in stream)
+                 else self.get_s_amp(data_amp, samp_rate))
         # 4. get p_snr
         p_snr = np.amax(cf_trig[p_idx0:p_idx1])
         # 5. quality control with amplitude ratios
-        p_amp_ratio = self.calc_peak_amp_ratio(stream.slice(tp, tp+self.pca_win*3), pca_win_npts)
-        s_amp_ratio = self.calc_peak_amp_ratio(stream.slice(ts, ts+self.pca_win*3), pca_win_npts)
-        amp_ratio = max(min(p_amp_ratio), min(s_amp_ratio))
-        A1 = np.array([np.amax(tr.data)-np.amin(tr.data) for tr in stream.slice(tp, tp+(ts-tp)/2)])
-        A2 = np.array([np.amax(tr.data)-np.amin(tr.data) for tr in stream.slice(tp+(ts-tp)/2, ts)])
-        A3 = np.array([np.amax(tr.data)-np.amin(tr.data) for tr in stream.slice(ts, ts+(ts-tp)/2)])
-        A12 = min([A1[ii]/A2[ii] for ii in range(3)])
-        A13 = min([A1[ii]/A3[ii] for ii in range(3)])
+        amp_ratio, A12, A13 = self.calc_amplitude_qc(stream, tp, ts, pca_win_npts)
         # output picks
-        in_target_day = (
-            (pick_start_time is None or tp >= pick_start_time)
-            and (pick_end_time is None or tp < pick_end_time)
-        )
-        if in_target_day and amp_ratio<self.amp_ratio_thres[0] and A12<self.amp_ratio_thres[1] and A13<self.amp_ratio_thres[2]:
+        if in_target_day and self.amplitude_qc_passes((amp_ratio, A12, A13)):
             self._log('{}, {}, {}'.format(net_sta, tp, ts))
             sta_ot = self.calc_ot(tp, ts)
             picks.append((net_sta, sta_ot, tp, ts, s_amp))
@@ -342,7 +334,48 @@ class STA_LTA_Kurtosis(object):
     kurt[valid] = moment4[valid] / moment2[valid]**2 - 3.0
     return kurt
 
+  def amplitude_qc_passes(self, ratios):
+    """Unavailable checks are bypassed; evaluated failures still reject."""
+    return all(np.isnan(value) or value < threshold
+               for value, threshold in zip(ratios, self.amp_ratio_thres))
+
+  def calc_amplitude_qc(self, stream, tp, ts, pca_win_npts):
+    """Return NaN for unavailable checks, retaining other measurable ratios."""
+    if ts <= tp:
+        return (np.inf, np.inf, np.inf)
+    windows = [
+        stream.slice(tp, tp+self.pca_win*3),
+        stream.slice(ts, ts+self.pca_win*3),
+        stream.slice(tp, tp+(ts-tp)/2),
+        stream.slice(tp+(ts-tp)/2, ts),
+        stream.slice(ts, ts+(ts-tp)/2),
+    ]
+    # ObsPy can drop components from a short slice near a trace boundary.
+    ids = [tr.id for tr in stream]
+    valid = [len(ids) == 3 and [tr.id for tr in window] == ids
+             and all(len(tr.data) > 0 and np.all(np.isfinite(tr.data))
+                     for tr in window)
+             for window in windows]
+    amp_ratio = np.nan
+    if valid[0] and valid[1]:
+        p_ratio = self.calc_peak_amp_ratio(windows[0], pca_win_npts)
+        s_ratio = self.calc_peak_amp_ratio(windows[1], pca_win_npts)
+        amp_ratio = np.maximum(np.min(p_ratio), np.min(s_ratio))
+    amplitudes = [np.array([np.ptp(tr.data) for tr in window]) if ok else None
+                  for window, ok in zip(windows[2:], valid[2:])]
+    A12 = A13 = np.nan
+    with np.errstate(divide='ignore', invalid='ignore'):
+        if valid[2] and valid[3]:
+            A12 = np.min(amplitudes[0] / amplitudes[1])
+        if valid[2] and valid[4]:
+            A13 = np.min(amplitudes[0] / amplitudes[2])
+    return amp_ratio, A12, A13
+
   def calc_peak_amp_ratio(self, st, win_peak_npts):
+    if len(st) != 3 or win_peak_npts <= 0 or any(
+        len(tr.data) < win_peak_npts for tr in st
+    ):
+        return [np.nan] * 3
     # find peak idx
     peak_data = np.array([abs(tr.data[0:win_peak_npts]) for tr in st])
     chn_idx = np.unravel_index(np.argmax(peak_data), peak_data.shape)[0]
@@ -354,6 +387,9 @@ class STA_LTA_Kurtosis(object):
     # calc peak amp ratio 
     amp_ratio = []
     for tr in st:
+        if (len(tr.data[idx0:idx1]) == 0
+                or len(tr.data[idx1:2*idx1-idx0]) == 0):
+            return [np.nan] * 3
         amp_peak = np.amax(tr.data[idx0:idx1]) - np.amin(tr.data[idx0:idx1])
         amp_tail = np.amax(tr.data[idx1:2*idx1-idx0]) - np.amin(tr.data[idx1:2*idx1-idx0])
         amp_ratio.append(amp_peak/amp_tail)

@@ -15,9 +15,9 @@ fout = str(resolve_path('output/station_%s.csv' % CASE_CODE))
 fsummary = str(resolve_path('output/station_%s_metadata_audit.csv' % CASE_CODE))
 fcoverage = str(resolve_path(
     'output/station_%s_gain_interval_audit.csv' % CASE_CODE))
-# Location is selected first for each net.sta period, then channel band.
+# Retain all location/band epochs; select priorities at waveform reading.
 loc_codes = ['10', '20', '01', '02', '00', '']
-chn_codes = ['HH', 'BH', 'EH', 'HN']
+chn_codes = ['HH', 'BH', 'EH', 'HN', 'EN', 'SH']
 lat_min, lat_max = 35.5, 36.0
 lon_min, lon_max = -117.8, -117.3
 t_min, t_max = UTCDateTime('20190701'), UTCDateTime('20190801')
@@ -135,59 +135,27 @@ def normalize_coverage(periods, station):
 
 
 def format_station(sta_dict):
-    out_lines, summary_lines, coverage_rows = [], [], []
-    for (net,sta), recs in sorted(sta_dict.items()):
-        edge_dict = {}
-        for rec in recs:
-            edge_dict[float(rec['t0'])] = rec['t0']
-            edge_dict[float(rec['t1'])] = rec['t1']
-        edges = [edge_dict[key] for key in sorted(edge_dict)]
-        periods = []
-        for idx in range(len(edges)-1):
-            t0, t1 = edges[idx], edges[idx+1]
-            if t0>=t1: continue
-            active_recs = period_active_records(recs, t0, t1)
-            if len(active_recs)==0: continue
-            loc, active_locs = choose_location(active_recs)
-            loc_recs = [rec for rec in active_recs if rec['loc']==loc]
-            chn0, active_chns = choose_channel(loc_recs)
-            if chn0 is None: continue
-            sel_recs = [rec for rec in loc_recs if rec['chn0']==chn0]
-            gain_str, gain_note = gain_code(sel_recs)
-            lat = sum([rec['lat'] for rec in sel_recs]) / len(sel_recs)
-            lon = sum([rec['lon'] for rec in sel_recs]) / len(sel_recs)
-            ele = sum([rec['ele'] for rec in sel_recs]) / len(sel_recs)
-            comp_counts = defaultdict(int)
-            for rec in sel_recs:
-                comp_counts[rec['comp']] += 1
-            dup_comps = sorted([comp for comp,count in comp_counts.items() if count>1])
-            periods.append({
-                't0': t0, 't1': t1, 'loc': loc, 'chn0': chn0,
-                'active_locs': active_locs, 'active_chns': active_chns,
-                'gain_str': gain_str,
-                'gain_note': gain_note, 'dup_comps': dup_comps,
-                'lat': lat, 'lon': lon, 'ele': ele})
+    """Keep every selector and its true epochs; never fill operational gaps."""
+    out_lines, summary_lines = [], []
+    for (net, sta), records in sorted(sta_dict.items()):
+        groups = defaultdict(list)
+        for record in records:
+            groups[(record['chn0'], record['loc'])].append(record)
+        for (band, loc), recs in sorted(groups.items()):
+            edges = [UTCDateTime(t) for t in sorted({float(r[k]) for r in recs for k in ('t0', 't1')})]
+            for start, end in zip(edges, edges[1:]):
+                active = period_active_records(recs, start, end)
+                if not active:
+                    continue
+                gains, note = gain_code(active)
+                coords = [sum(r[k] for r in active) / len(active) for k in ('lat', 'lon', 'ele')]
+                out_lines.append('{0}.{1}.{2}.{3},{4:.6f},{5:.6f},{6:.1f},{7},{8},{9}\n'.format(
+                    net, sta, band, loc, *coords, gains, start, end))
+                if note:
+                    summary_lines.append('{},{},{},{},{},{},{},{},{},\n'.format(
+                        net, sta, time_str(start), time_str(end), loc, loc, band, band, note))
+    return out_lines, summary_lines, []
 
-        for period in sorted(periods, key=lambda item: (item['t0'], item['t1'])):
-            if (len(period['active_locs'])>1 or
-                    len(period['active_chns'])>1 or period['gain_note'] or
-                    len(period['dup_comps'])>0):
-                summary_lines.append('{},{},{},{},{},{},{},{},{},{}\n'.format(
-                    net, sta, time_str(period['t0']), time_str(period['t1']),
-                    ';'.join(period['active_locs']), period['loc'],
-                    ';'.join(period['active_chns']), period['chn0'],
-                    period['gain_note'], ';'.join(period['dup_comps'])))
-
-        station = '{}.{}'.format(net, sta)
-        periods, station_coverage = normalize_coverage(periods, station)
-        coverage_rows.extend(station_coverage)
-        for period in periods:
-            net_sta_chn_loc = '%s.%s.%s.%s'%(
-                net,sta,period['chn0'],period['loc'])
-            out_lines.append('{},{:.6f},{:.6f},{:.1f},{},{},{}\n'.format(
-                net_sta_chn_loc, period['lat'], period['lon'], period['ele'],
-                period['gain_str'], str(period['t0']), str(period['t1'])))
-    return out_lines, summary_lines, coverage_rows
 
 
 def write_lines(fout, lines, header=None):

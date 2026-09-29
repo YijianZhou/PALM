@@ -9,6 +9,7 @@ import multiprocessing
 import os
 import traceback
 import time
+from collections import OrderedDict
 from queue import Empty
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -97,13 +98,23 @@ def processing_day_bounds(cfg, observed_date):
 
 def load_picks(cfg, date, pick_dir):
     """Load picks, passing PAL's in-memory origin-time velocity when supported."""
+    cache = getattr(cfg, "_daily_pick_cache", None)
+    key = (str(Path(pick_dir).resolve()), str(date.date))
+    if cache is not None and key in cache:
+        cache.move_to_end(key)
+        return cache[key]
     parameters = inspect.signature(cfg.get_picks).parameters
     kwargs = {}
     if "vp" in parameters:
         kwargs["vp"] = float(getattr(cfg, "picker_vp", 5.9))
     if "vs" in parameters:
         kwargs["vs"] = float(getattr(cfg, "picker_vs", 3.45))
-    return cfg.get_picks(date, pick_dir, **kwargs)
+    picks = cfg.get_picks(date, pick_dir, **kwargs)
+    if cache is not None:
+        cache[key] = picks
+        while len(cache) > 3:
+            cache.popitem(last=False)
+    return picks
 
 
 def load_station_geometry(cfg, station_file, observed_date):
@@ -450,8 +461,11 @@ def write_association_rate(
     input_picks = input_picks_for_date(
         cfg, pick_dir, observed_date, association_buffer_enabled
     )
-    trigger_counts = read_trigger_counts(
-        pick_dir, observed_date, required=True
+    # AI workflow configs declare continuous model pickers, not STA/LTA triggers.
+    # Do not infer the denominator from whether an inventory happens to exist.
+    trigger_counts = (
+        None if hasattr(cfg, "picker_pos_neg_group") else
+        read_trigger_counts(pick_dir, observed_date, required=True)
     )
     owned_start, owned_end = processing_day_bounds(cfg, observed_date)
     return write_association_rate_from_picks(
@@ -506,6 +520,17 @@ def _atomic_json(path, value):
     partial.replace(path)
 
 
+def _association_policy(run, cfg):
+    return {
+        "buffer_enabled": bool(run.association_buffer_enabled),
+        "buffer_sec": get_association_buffer_sec(cfg) if run.association_buffer_enabled else 0.0,
+    }
+
+
+def _write_status(path, value, run, cfg):
+    _atomic_json(path, dict(value, association_policy=_association_policy(run, cfg)))
+
+
 def _status_paths(run, stage, observed_date, subnet=None):
     parts = [stage]
     if subnet is not None:
@@ -525,6 +550,8 @@ def _should_skip(run, done_path, failed_path, cfg):
         return False
     try:
         metadata = json.loads(status_path.read_text(encoding="utf-8"))
+        if metadata.get("association_policy") != _association_policy(run, cfg):
+            return False
         recorded = metadata.get("data_buffer_sec")
         expected = float(getattr(cfg, "data_buffer_sec", 0.0))
         return (
@@ -554,11 +581,9 @@ def _rate_file(run, observed_date):
     )
 
 
-def _raw_worker(task):
+def _raw_subnet_worker(task, cfg, associator_cache, get_day_picks):
     run, subnet, worker_dates = task
     station_file = Path(run.subnet_station_files[subnet])
-    cfg = run.config()
-    associator_cache = {}
     results = []
     for observed_date in worker_dates:
         done_path, failed_path = _status_paths(run, "raw_status", observed_date, subnet)
@@ -577,11 +602,11 @@ def _raw_worker(task):
         try:
             with log_path.open("w", encoding="utf-8") as log_fp:
                 with contextlib.redirect_stdout(log_fp), contextlib.redirect_stderr(log_fp):
-                    summary = associate_subnet_day(
+                    summary = associate_subnet_picks(
                         observed_date,
                         subnet,
                         station_file,
-                        run.pick_dir,
+                        get_day_picks(),
                         raw_catalog,
                         raw_phase,
                         cfg,
@@ -590,7 +615,6 @@ def _raw_worker(task):
                             get_association_buffer_sec(cfg)
                             if run.association_buffer_enabled else 0.0
                         ),
-                        run.association_buffer_enabled,
                     )
                     summary.update({
                         "date": _date_code(observed_date),
@@ -600,18 +624,18 @@ def _raw_worker(task):
                         )),
                     })
                     print(json.dumps(summary, indent=2))
-            _atomic_json(done_path, summary)
+            _write_status(done_path, summary, run, cfg)
             failed_path.unlink(missing_ok=True)
             state = "completed"
         except Exception as exc:
-            _atomic_json(failed_path, {
+            _write_status(failed_path, {
                 "date": _date_code(observed_date),
                 "subnet": subnet,
                 "data_buffer_sec": float(getattr(cfg, "data_buffer_sec", 0.0)),
                 "error": repr(exc),
                 "traceback": traceback.format_exc(),
                 "log": str(log_path),
-            })
+            }, run, cfg)
             state = "failed"
         results.append((label, state))
         _report_progress(label, state)
@@ -653,16 +677,16 @@ def _merge_day(task):
         summary["data_buffer_sec"] = float(getattr(
             cfg, "data_buffer_sec", 0.0
         ))
-        _atomic_json(done_path, summary)
+        _write_status(done_path, summary, run, cfg)
         failed_path.unlink(missing_ok=True)
         return _date_code(observed_date), "completed"
     except Exception as exc:
-        _atomic_json(failed_path, {
+        _write_status(failed_path, {
             "date": _date_code(observed_date),
             "data_buffer_sec": float(getattr(cfg, "data_buffer_sec", 0.0)),
             "error": repr(exc),
             "traceback": traceback.format_exc(),
-        })
+        }, run, cfg)
         return _date_code(observed_date), "failed"
 
 
@@ -704,34 +728,60 @@ def _finalize_day(task):
             "merged_phase": str(merged_phase),
             "merged_catalog": str(merged_catalog),
         }
-        _atomic_json(done_path, summary)
+        _write_status(done_path, summary, run, cfg)
         failed_path.unlink(missing_ok=True)
         return _date_code(observed_date), "completed"
     except Exception as exc:
-        _atomic_json(failed_path, {
+        _write_status(failed_path, {
             "date": _date_code(observed_date),
             "data_buffer_sec": float(getattr(cfg, "data_buffer_sec", 0.0)),
             "error": repr(exc),
             "traceback": traceback.format_exc(),
-        })
+        }, run, cfg)
         return _date_code(observed_date), "failed"
 
 
+def _raw_worker(task):
+    run, worker_dates = task
+    cfg = run.config()
+    cfg._daily_pick_cache = OrderedDict()
+    associator_cache = {}
+    results = []
+    for observed_date in worker_dates:
+        # Load lazily so a fully resumed date performs no pick I/O. All subnets
+        # share this buffered array; associate_subnet_picks makes a filtered copy.
+        day_data = {}
+
+        def get_day_picks():
+            if "error" in day_data:
+                raise day_data["error"]
+            if "picks" not in day_data:
+                try:
+                    day_data["picks"] = (
+                        buffered_picks(cfg, run.pick_dir, observed_date,
+                                       get_association_buffer_sec(cfg))
+                        if run.association_buffer_enabled
+                        else load_picks(cfg, utc_day(observed_date), run.pick_dir)
+                    )
+                except Exception as exc:
+                    day_data["error"] = exc
+                    raise
+            return day_data["picks"]
+
+        for subnet in sorted(run.subnet_station_files):
+            results.extend(_raw_subnet_worker(
+                (run, subnet, [observed_date]), cfg, associator_cache, get_day_picks
+            ))
+    return results
+
+
 def _build_raw_tasks(run, worker_dates):
-    subnets = sorted(
-        run.subnet_station_files,
-        key=lambda subnet: (-Path(run.subnet_station_files[subnet]).stat().st_size, subnet),
-    )
-    workers_by_subnet = {subnet: 1 for subnet in subnets}
-    for index in range(max(0, run.num_workers - len(subnets))):
-        workers_by_subnet[subnets[index % len(subnets)]] += 1
+    count = min(max(1, run.num_workers), len(worker_dates))
     tasks = []
-    for subnet in subnets:
-        count = workers_by_subnet[subnet]
-        for index in range(count):
-            dates = worker_dates[index::count]
-            if dates:
-                tasks.append((run, subnet, dates))
+    for index in range(count):
+        dates = worker_dates[len(worker_dates) * index // count:
+                             len(worker_dates) * (index + 1) // count]
+        tasks.append((run, dates))
     return tasks
 
 
@@ -798,8 +848,8 @@ def _run_parallel(function, items, worker_count):
     if not items:
         return []
     raw = function is _raw_worker
-    total_days = len({day for _, _, dates in items for day in dates}) if raw else len(items)
-    subnets = len({subnet for _, subnet, _ in items}) if raw else 1
+    total_days = len({day for _, dates in items for day in dates}) if raw else len(items)
+    subnets = len(items[0][0].subnet_station_files) if raw else 1
     stage = {
         "_raw_worker": "association (including halo days)",
         "_merge_day": "merge (including halo days)",
@@ -831,13 +881,35 @@ def _run_parallel(function, items, worker_count):
         queue.join_thread()
 
 
-def _require_success(stage, results):
+def _require_success(stage, results, run=None):
     failures = []
     for result in results:
         rows = result if isinstance(result, list) else [result]
         failures.extend(row for row in rows if row[1] == "failed")
     if failures:
-        raise RuntimeError("{} failures: {}".format(stage, failures))
+        details = []
+        status_dir = {"raw association": "raw_status", "daily merge": "merge_status",
+                      "daily finalization": "assoc_status"}.get(stage)
+        for label, state in failures:
+            item = {"task": label, "state": state}
+            if run is not None and status_dir:
+                parts = str(label).split(":", 1) if stage == "raw association" else [str(label)]
+                path = run.path(status_dir, *parts[:-1], parts[-1] + ".failed.json")
+                item["status_file"] = str(path)
+                try:
+                    item.update(json.loads(path.read_text(encoding="utf-8")))
+                except (OSError, ValueError) as exc:
+                    item["error"] = "Could not read failure details: {}".format(exc)
+            details.append(item)
+        report = None
+        if run is not None:
+            report = run.path("failure_report.json")
+            _atomic_json(report, {"stage": stage, "failed_tasks": len(details), "failures": details})
+        preview = "; ".join("{}: {}".format(item["task"], item.get("error", "failed"))
+                            for item in details[:3])
+        raise RuntimeError("{}: {} failed task(s). {}{}".format(
+            stage, len(details), preview,
+            " | Full errors and tracebacks: {}".format(report) if report else ""))
 
 
 def run_daily_association(
@@ -921,6 +993,7 @@ def run_daily_association(
     _require_success(
         "raw association",
         _run_parallel(_raw_worker, _build_raw_tasks(run, work_dates), run.num_workers),
+        run,
     )
     merge_scope = (
         "cross-day and cross-subnet" if run.association_buffer_enabled
@@ -935,6 +1008,7 @@ def run_daily_association(
             [(run, observed_date) for observed_date in work_dates],
             run.num_workers,
         ),
+        run,
     )
     runtime_console.log("stage", "3/3 station-date association rates")
     print("stage 3: station-date association rates")
@@ -945,6 +1019,7 @@ def run_daily_association(
             [(run, observed_date) for observed_date in target_dates],
             run.num_workers,
         ),
+        run,
     )
     print("association complete: {} target days".format(len(target_dates)))
     runtime_console.log(
@@ -952,6 +1027,19 @@ def run_daily_association(
         "association | {} target days".format(len(target_dates)),
     )
     runtime_console.log("output", "association products | {}".format(out_root))
+
+def offline_association_root(case_root, cadence="daily"):
+    """Use clean new work paths, retaining existing offline resume directories."""
+    case_root = Path(case_root)
+    current = case_root / "_internal" / (cadence + "_assoc_AI-PAL")
+    if current.exists():
+        return current
+    for name in ("2.1_phase_init_AI-PAL", "2.1.0_phase_init_AI-PAL"):
+        legacy = case_root / name / (cadence + "_assoc")
+        if legacy.is_dir():
+            return legacy
+    return current
+
 
 def _combine_files(paths, output_path):
     output_path = Path(output_path)
