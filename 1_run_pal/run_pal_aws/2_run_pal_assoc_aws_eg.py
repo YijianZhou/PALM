@@ -73,7 +73,7 @@ job_code = "%s-assoc-%d" % (CASE_CODE, study_year)
 pal_files = (
     "associator_pal.py",
     "association_runner.py",
-    "data_pipeline_aws.py",
+    "data_pipeline_aws.py", "station_inventory.py",
     "phase_merge.py",
     "pick_ensemble.py",
     "runtime_console.py",

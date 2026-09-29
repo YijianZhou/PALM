@@ -13,12 +13,16 @@ class Config(object):
     self.trig_thres = 12.
     self.p_win      = [.5,1.]
     self.s_win      = 10.
+    self.association_buffer_sec = 30.0  # Independent of the picker's S search window.
     self.pca_win    = 1.
     self.pca_range  = [0.,2.]
     self.amp_ratio_thres = [6,10,3]
     self.amp_win    = [1.,5.]
     self.det_gap    = 5.
-    self.to_prep    = True  # required for raw SCEDC objects
+    self.station_selection_order = "channel_first"  # or location_first
+    self.channel_priority = ["HH", "BH", "EH", "HN", "EN", "SH"]
+    self.location_priority = ["10", "20", "01", "02", "00", ""]
+    self.to_clean    = True  # required for raw SCEDC objects
     self.to_filter  = True  # apply freq_band before PAL picking
     self.freq_band  = [1,20]
     self.data_buffer_sec = 60.0  # rolling unfiltered edge context

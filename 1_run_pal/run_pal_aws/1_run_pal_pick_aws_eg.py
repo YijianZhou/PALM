@@ -67,7 +67,7 @@ pal_dir = PALM_ROOT / "PAL_src"
 case_config_file = "config_aws_%s.py" % CASE_CODE
 job_code = "%s-pick-%d" % (CASE_CODE, study_year)
 pal_files = (
-    "data_pipeline_aws.py",
+    "data_pipeline_aws.py", "station_inventory.py",
     "pick_runner.py",
     "run_pick_aws.py",
     "picker_pal.py",

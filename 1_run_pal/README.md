@@ -1,5 +1,17 @@
 # Run PAL
 
+Amplitude QC uses matching three-component time windows. If a short ObsPy
+slice drops a component or a peak/tail window is empty, the affected QC ratio
+is written as `nan` and that check is bypassed. The pick is retained unless
+another available QC check fails; trigger counts and time ownership are unchanged.
+Completed days remain resumable after a failed run.
+
+Magnitude values may be negative. Event merging retains every finite magnitude;
+an unavailable magnitude is written as `nan`, not -1. Exclude unavailable values
+from magnitude statistics and training labels. Older outputs affected by the
+negative-magnitude merge bug require recalculation from amplitudes and station
+geometry; a historical -1 header value alone is ambiguous.
+
 This workflow is synchronized with `AI-PAL/1_run_pal` and uses the same
 `PAL_src` output contract. For identical data and configuration, both produce
 the same scientific pick, trigger-count, association, catalog, and phase file
@@ -37,10 +49,54 @@ flowchart LR
     E --> I
 ```
 
-The one-click and separated launchers execute the same scientific stages. The
+The picking and association launchers execute sequential scientific stages. The
 remaining sections describe waveform boundaries, configuration, and execution.
 
 ## Waveform Edges
+
+### Association overlap and ownership
+
+PAL configs explicitly set `association_buffer_sec = 30.0`, separately from
+`data_buffer_sec = 60.0`. For nominal day D, let L = D - 60 s and
+R = D + 1 day - 60 s. Buffered association loads neighboring pick files and
+selects estimated station origin times in [L - 30 s, R + 30 s).
+Final events belong to [L, R) by event origin time, not by P arrival time.
+Raw overlapping detections are merged across neighboring days/subnets before
+the canonical origin-time cut; this groups boundary duplicates with slightly
+different estimated origins.
+
+Finish local picking (including halo days) before starting
+association. Local picking divides the requested interval (including halo days)
+into at most `NUM_WORKERS` contiguous whole-day blocks. Each spawned process
+handles its days and stations sequentially, retaining rolling tails within its
+block and reading predecessor context directly at block starts/resume gaps.
+Blocks write disjoint daily outputs and require no inter-worker waveform
+exchange. The top-level `threads_per_worker` setting controls native numerical
+thread pools per process (example default: 2, matching AWS). It is not a station
+thread count and does not make every filtering operation multithreaded.
+Benchmark 1 versus 2 or more on representative days; avoid oversubscribing the
+available CPUs with the product of processes and native threads.
+Each block has a `pick_<block-start>-<block-end>.log`; parent progress aggregates
+completed/skipped days and identifies the worker of the latest station update.
+Worker failures stop the run and report the relevant log; completed outputs
+remain resumable. Config factories must be importable (as in the examples),
+and executable scripts must use their existing `__main__` guard.
+Association
+divides the dates into at most num_workers contiguous blocks. Each worker
+processes all subnets for its current day, sharing one full buffered pick array;
+each subnet receives a station-filtered copy. A three-day parsed-pick cache
+evicts older entries as the block advances. Fully resumed dates require no
+pick reads. Only block-boundary halos and the later association-rate pass can
+reread daily picks; separate subnets no longer cause extra reads. No full-study
+pick inventory is retained in RAM. Subnet association is sequential within a
+worker; blocks run in parallel, so a very short interval may use fewer workers.
+
+Changing association buffer mode or seconds invalidates association resume
+statuses; old statuses without this policy are recomputed. Picks are unchanged.
+Legacy configs without the explicit setting still use the 2*s_win fallback.
+The AI ensemble workflow's separate buffer defaults are not changed here.
+
+### Waveform context
 
 PAL uses the same rolling raw-tail strategy as AI-PAL. With the default
 `data_buffer_sec = 60`, the run seeds its first date from the preceding day's
@@ -58,36 +114,62 @@ event filtering use the same shifted bounds. Set `data_buffer_sec = 0` to
 retain strict UTC-day ownership without edge context.
 ## Local Workflow
 
-Edit the clearly marked user-settings blocks in `run_pal_local/` and run either
-the one-click workflow or the two separate steps:
+Local picking reports concise console progress every 30 seconds and after each
+completed/skipped day: date, collected station results, completed/skipped days
+(including requested halo days), and elapsed time. Detailed station output
+stays in the line-buffered pick log. During startup the heartbeat reports
+initialization/previous-day context loading. A long-running station can leave
+the collected count unchanged while the heartbeat continues. Exceptions appear
+on the console and retain their traceback in the log.
+
+Edit the clearly marked user-settings blocks in `run_pal_local/` and run
+picking, then association:
 
 ```bash
-python 1_run_pal_pick_assoc_eg.py
-# or
-python 2.1_run_pal_pick_eg.py
-python 2.2_run_pal_assoc_eg.py
+python 1_run_pal_pick_eg.py
+python 2_run_pal_assoc_eg.py
 ```
 
-Station metadata preparation now lives in `../preprocess/`. Its numbered
-workflow selects channel epochs and normalizes time-varying gain intervals
-before publishing the station CSV consumed here. There is no station-preparation
-step in `run_pal_local/`.
+Station metadata preparation lives in `../preprocess/`. Step 0.2 publishes all
+candidate `NET.STA.BAND.LOC` gain epochs with their actual operational periods.
+Local examples default to `input/example_pal_format4.sta`. Selection is dynamic
+per station-day: `station_selection_order = "channel_first"` (default) or
+`"location_first"`, using the configured channel and location priority lists.
+Detailed gains are applied to the selected original component before merging.
+Location comes from the MiniSEED header, even when the filename omits it.
+Local picking prefers an exact band/location/time match, then an active gain
+from another location of the same band, then the nearest same-band gain epoch
+(preferring the matching location on ties). It does not borrow between bands.
+If no compatible gain exists, it uses 1 and retains uncalibrated counts so a
+missing gain alone does not discard the waveform. Fallbacks are warned in the
+pick log; amplitudes, amplitude-based quality checks, and magnitudes may be
+unreliable. Legacy unqualified rows still apply to all bands.
+AWS/shared calibration remains strict unless explicitly opted into fallback.
+Existing pick outputs are not automatically invalidated: reprocess affected
+days and their downstream association outputs after installing this change.
+See [station formats](../STATION_FORMATS.md) for compatibility and migration.
 
-Waveform readers use half-open gain intervals (`t0 <= time < t1`). If an
-unprocessed station file still has a gap or lacks coverage outside its first or
-last epoch, PAL selects the interval whose boundary is closest to the
-waveform midpoint and emit one warning per station/selected epoch rather than
-terminating the run.
-
-`1_run_pal_pick_assoc_eg.py` uses one full station file for both picking and
-association. The split association launcher accepts either a single `full`
+`1_run_pal_pick_eg.py` writes picks and sidecars; association reads those
+files without rereading waveforms. Keep both launchers' date ranges and pick
+directories aligned. The association launcher accepts either a single `full`
 station set or subnet keys matching `subnet_assoc_params` in the selected case
-config. Both launchers use independent-day association for training labels.
+config. Local launchers use buffered association; picking includes one extra
+nominal day before and after the requested interval.
+
+On resume with overwrite disabled, completed days are checked using their pick
+and sidecar files without scanning or reading waveforms. Immediately before a
+day needing picking, its previous-day tail is loaded if no consecutive-day
+cache is available. An all-complete run does not load waveform context.
+
+Trigger candidates and accepted picks both belong to the shifted daily interval
+by refined P time (`tp`), not the initial STA/LTA crossing time. Candidates are
+counted before QC, including those subsequently rejected. This keeps accepted
+counts bounded by trigger counts even when P refinement crosses a day boundary.
 
 Picking writes one `*.trigger_counts.csv` sidecar per day. Its station counts
 record distinct STA/LTA trigger candidates before amplitude-ratio and related
-waveform QC. Dominant frequency is not calculated or used as PAL QC. Both the
-one-click and separated association workflows define:
+waveform QC. Dominant frequency is not calculated or used as PAL QC.
+Association statistics use pre-QC trigger counts.
 
 ```text
 association_ratio = num_associated_picks / num_picks
@@ -232,10 +314,10 @@ rolling waveform context, phase merging, and picker-ensemble metadata support.
 Station files remain under `run_pal_aws/input/`.
 ### Waveform rules
 
-For each date, the pipeline selects only the band active in the PAL station
-epoch. It repeats the inventory location rule: nonblank location codes first in
-lexical order, followed by blank location `--`. Three components are ordered as
-E/N/Z. For one-component data, that component is copied three times. For
+For each date, the pipeline chooses the available band/location using the same
+configurable priorities as local PAL. Station metadata is keyed by `NET.STA`;
+detailed inventory gains match the actual selected band/location and sample
+time. Three components are ordered as E/N/Z. For one-component data, that component is copied three times. For
 two-component data, Z is copied three times when present; otherwise the first
 horizontal component is copied three times.
 
