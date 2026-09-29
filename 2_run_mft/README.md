@@ -16,6 +16,13 @@ installed PALM package when the executable directory is copied elsewhere.
 
 ## Workflow
 
+Prepare the waveform archive first using the [preprocess workflow](../preprocess/README.md):
+download with `1.1_download_continuous_data_eg.py`, reconcile station metadata,
+then clean and merge with `2_merge_raw_data_eg.py`. Set `DATA_DIR` in the
+template-cutting and MFT launchers to the resulting cleaned archive.
+Downloading is maintained only in `preprocess/`; this directory starts with
+template selection and does not contain separate download scripts.
+
 1. Select located PAL or AI-PAL events as templates:
 
    ```bash
@@ -186,3 +193,14 @@ and `PAL_src/` to the child process import path and set `PALM_MFT_CONFIG` to
 the selected case module. The executable directory therefore contains only
 numbered case launchers, the user configuration, input data, and this README.
 No launcher copies or modifies files under either shared source directory.
+
+## Station Selection and Gains
+
+CPU and GPU MFT continuous readers share PAL's selection and calibration code.
+`station_selection_order = "channel_first"` is the default; choose
+`"location_first"` to reverse the configured channel/location priority lists.
+Local examples use `input/example_pal_format4.sta`. A complete
+`NET.STA.BAND.LOC` inventory preserves all candidate operational/gain epochs;
+select the actual available combination per station-day and calibrate before
+component replication or joining buffered days. Simplified station files remain
+supported. See [station formats](../STATION_FORMATS.md).

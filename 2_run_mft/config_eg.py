@@ -41,4 +41,7 @@ class Config(object):
     self.freq_band = [1.,16.]
     self.num_workers = 10
     self.get_data_dict = dp.get_data_dict
+    self.channel_priority = ["HH", "BH", "EH", "HN", "EN", "SH"]
+    self.location_priority = ["10", "20", "01", "02", "00", ""]
+    self.station_selection_order = "channel_first"
     self.get_sta_dict = dp.get_sta_dict
