@@ -1,16 +1,32 @@
 # Run PAL
 
+Range-level PAL exports now include `association_rates_<TIME_RANGE>.csv`
+beside the phase/catalog files. It concatenates daily station-date rates with
+one header, preserving counts and ratios for negative training sample selection.
+All requested daily rate files are required; missing inputs abort export instead
+of silently publishing an incomplete table. Daily files remain available.
+For completed runs, call `association_runner.combine_daily_association_rates(
+assoc_root, time_range, output_path)` to export rates without rerunning association.
+
 Amplitude QC uses matching three-component time windows. If a short ObsPy
 slice drops a component or a peak/tail window is empty, the affected QC ratio
 is written as `nan` and that check is bypassed. The pick is retained unless
 another available QC check fails; trigger counts and time ownership are unchanged.
 Completed days remain resumable after a failed run.
 
-Magnitude values may be negative. Event merging retains every finite magnitude;
-an unavailable magnitude is written as `nan`, not -1. Exclude unavailable values
-from magnitude statistics and training labels. Older outputs affected by the
-negative-magnitude merge bug require recalculation from amplitudes and station
-geometry; a historical -1 header value alone is ambiguous.
+PAL magnitude QC requires `mag_min_stations = 3` distinct NET.STA estimates
+and population standard deviation <= `mag_max_std = 1.0`. Only finite,
+positive calibrated amplitudes contribute. Duplicate station estimates are
+collapsed by median; spread is checked without clipping, then the event
+magnitude is the median of all valid station estimates.
+Failed/unavailable magnitude is written as `-1`; the event and picks remain.
+Gain 1.0 is a missing-calibration placeholder, including in legacy station
+layouts and same-band fallback. Those traces remain usable for picking.
+If any selected component has missing gain, its station amplitude is `nan`
+and excluded from magnitude estimation. Other negative magnitudes are
+valid. The requested -1 sentinel is indistinguishable from a true ML of exactly
+-1 in the phase format and is excluded from event-magnitude merging.
+Historical outputs require reprocessing; changing the config does not rewrite them.
 
 This workflow is synchronized with `AI-PAL/1_run_pal` and uses the same
 `PAL_src` output contract. For identical data and configuration, both produce

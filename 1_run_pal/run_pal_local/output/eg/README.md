@@ -19,6 +19,7 @@ The example dates intentionally differ from the launcher's placeholder dates.
 ```text
 catalog_20260909-20260910.dat
 phase_20260909-20260910.dat
+association_rates_20260909-20260910.csv
 picks/
   2026-09-09.pick
   2026-09-09.trigger_counts.csv
@@ -30,7 +31,9 @@ association/
     association_rate_2026-09-09.csv
 ```
 
-The root catalog and phase file are the direct user-facing results. Here they
+The root catalog, phase file, and integrated association-rate CSV are the
+direct user-facing results. The integrated CSV contains one header and the
+same illustrative station-date rows as the daily rate file below. Here they
 match the single daily merged result. Actual runs also create logs, subnet
 intermediates, merge diagnostics, and resume status files; these are omitted.
 There are 3 events, 20 associated station P/S pairs, and 21 accepted picks.

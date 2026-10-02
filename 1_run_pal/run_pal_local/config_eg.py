@@ -33,6 +33,8 @@ class Config(object):
     self.picker_vs   = 3.45
     # 2. associator params
     self.association_buffer_sec = 30.0  # Pick overlap on each side of the owned interval.
+    self.mag_min_stations = 3  # Distinct stations with finite, positive calibrated amplitudes.
+    self.mag_max_std = 1.0  # Station-magnitude population std; failures output -1.
     self.subnet_assoc_params = {
         "default": {
             "min_sta": 4,
