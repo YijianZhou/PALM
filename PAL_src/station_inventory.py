@@ -126,6 +126,9 @@ def calibrate_trace(trace, metadata, allow_fallback=False):
         if selected is None:
             trace.stats.gain_missing = True
         gain = selected['gains']['ENZ'.index(component)] if selected else 1.0
+        # Unit gain is a missing-calibration placeholder, not an SI response.
+        if gain == 1.0:
+            trace.stats.gain_missing = True
         spans.append((left, right, gain))
     trace.data = np.asarray(trace.data, dtype=np.float64)
     for left, right, gain in spans:

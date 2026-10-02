@@ -5,6 +5,36 @@ procedure are in [CHANGELOG_INTERNAL.md](CHANGELOG_INTERNAL.md).
 
 ## Unreleased
 
+- 2026-10-01: PAL range exports include one integrated association-rate CSV
+  beside phase/catalog outputs, ready for training sample preparation.
+
+### 2026-09-30: Unit-Gain Placeholder
+
+- Treat gain 1.0 as missing calibration in local/AWS PAL and AI-PAL realtime
+  processing, including legacy gain layouts. Retain waveform picking but output
+  NaN station amplitude and exclude it from magnitude calculation if a selected
+  component is uncalibrated. Existing amplitudes require reprocessing.
+- AI-PAL repick version is advanced to invalidate previous repick completion
+  records. Regression tests cover unit gain on all or one component and both
+  AI-PAL/PALM calibration implementations.
+
+### 2026-09-30: PAL Magnitude QC
+
+- Require three distinct valid station magnitude estimates and population std
+  <= 1.0, configurable with `mag_min_stations` and `mag_max_std`.
+- Replace unconditional worst-station removal with a spread check followed by
+  the median. Failed magnitude is -1 without discarding arrival picks or events;
+  missing-gain amplitudes remain NaN. Magnitude merging excludes the -1 sentinel
+  and retains other negative values. This supersedes the earlier NaN event-mag
+  convention for PAL; MFT magnitude estimation is unchanged.
+- Shared helper and parameter propagation cover local/AWS PAL and AI-PAL
+  realtime/reassociation. Repick completion checks include magnitude thresholds.
+  Tests cover the reported M6.56 case, missing amplitudes, distinct stations,
+  negative magnitudes, threshold boundaries and AI-PAL/PALM source parity.
+
+- 2026-09-29: Removed redundant waveform download examples from `2_run_mft`.
+  Use the shared `preprocess/` workflow before template cutting and MFT.
+
 - Missing instrument gains no longer remove arrival-time picks. Same-band
   location/epoch fallback is allowed; no cross-band gain borrowing. Uncalibrated
   amplitudes are nan and excluded from event magnitude.

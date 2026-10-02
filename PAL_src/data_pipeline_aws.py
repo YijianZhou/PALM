@@ -382,6 +382,8 @@ def read_data_aws(
                 "invalid gain for {}: {}".format(station_metadata["net_sta"], gain)
             )
         if "inventory" not in station_metadata:
+            if gain == 1.0:
+                trace.stats.gain_missing = True
             trace.data = np.asarray(trace.data, dtype=np.float64) / gain
         if trace.stats.channel[1:2] in acceleration_instrument_codes:
             trace.detrend("demean").detrend("linear")

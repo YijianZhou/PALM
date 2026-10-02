@@ -743,15 +743,21 @@ def read_data(
         pass  # Selector/epoch gains (or local fallback) were applied before merging.
     elif isinstance(gain, float):
         for trace in stream:
+            if gain == 1.0:
+                trace.stats.gain_missing = True
             trace.data = trace.data / gain
     elif isinstance(gain[0], float):
         component_gains = dict(zip(COMPONENT_ORDER, (list(gain) * 3)[:3]))
         for trace, component in zip(stream, gain_components):
+            if component_gains[component] == 1.0:
+                trace.stats.gain_missing = True
             trace.data = trace.data / component_gains[component]
     elif isinstance(gain[0], list):
         selected_gain = select_gain_for_time(gain, stream_time, station=net_sta)
         component_gains = dict(zip(COMPONENT_ORDER, selected_gain))
         for trace, component in zip(stream, gain_components):
+            if component_gains[component] == 1.0:
+                trace.stats.gain_missing = True
             trace.data = trace.data / component_gains[component]
     return convert_acc_to_vel(stream)
 

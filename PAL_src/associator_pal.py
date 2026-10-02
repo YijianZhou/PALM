@@ -1,5 +1,6 @@
 from datetime import timedelta
 import numpy as np
+from magnitude_qc import magnitude_parameters, station_magnitude_summary
 
 
 def format_assoc_time(value):
@@ -37,7 +38,12 @@ class PS_Pair_Assoc(object):
                max_drop  = 1, 
                min_sta   = 4,
                lat_range = None,
-               lon_range = None):
+               lon_range = None,
+               mag_min_stations = 3,
+               mag_max_std = 1.0):
+    self.mag_min_stations = mag_min_stations
+    self.mag_max_std = mag_max_std
+    magnitude_parameters(self)
     self.sta_dict = sta_dict
     self.xy_margin = xy_margin
     self.lat_range = self._validate_range("lat_range", lat_range)
@@ -283,13 +289,8 @@ class PS_Pair_Assoc(object):
         dist = np.sqrt(dist_lon**2 + dist_lat**2 + dist_dep**2)
         if not np.isfinite(dist) or dist <= 0: continue
         station_mag = np.log10(amp) + np.log10(dist) + 1
-        if np.isfinite(station_mag): mag.append(station_mag)
-    mag = np.asarray(mag, dtype=float)
-    # Preserve the PAL one-outlier rejection when enough valid amplitudes exist.
-    if len(mag) >= 3:
-        mag_dev = abs(mag - np.median(mag))
-        mag = np.delete(mag, np.argmax(mag_dev))
-    event_loc['mag'] = round(float(np.median(mag)),2) if len(mag) else float("nan")
+        if np.isfinite(station_mag): mag.append((pick['net_sta'], station_mag))
+    event_loc.update(station_magnitude_summary(mag, self.mag_min_stations, self.mag_max_std))
     return event_loc
 
   def write_catalog(self, event_loc, out_ctlg):

@@ -14,6 +14,7 @@ from queue import Empty
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
+from magnitude_qc import magnitude_parameters
 
 import numpy as np
 from obspy import UTCDateTime
@@ -60,6 +61,7 @@ def get_assoc_params(cfg, subnet):
         params.update({
             name: getattr(cfg, name, None) for name in OPTIONAL_ASSOC_PARAM_NAMES
         })
+        params.update(magnitude_parameters(cfg))
         return params
     params = dict(configured.get("default", {}))
     params.update(configured.get(subnet, {}))
@@ -71,6 +73,7 @@ def get_assoc_params(cfg, subnet):
         ))
     resolved = {name: params[name] for name in ASSOC_PARAM_NAMES}
     resolved.update({name: params.get(name) for name in OPTIONAL_ASSOC_PARAM_NAMES})
+    resolved.update(magnitude_parameters(cfg))
     return resolved
 
 
@@ -1053,6 +1056,47 @@ def _combine_files(paths, output_path):
     partial.replace(output_path)
 
 
+def combine_daily_association_rates(assoc_root, time_range, output_path):
+    """Publish station-date rows with one header; never silently omit a day."""
+    start, end = parse_date_range(time_range)
+    days = dates_between(start, end)
+    paths = [Path(assoc_root) / "association_rates" /
+             ("association_rate_{}.csv".format(_date_code(day))) for day in days]
+    missing = [str(path) for path in paths if not path.is_file()]
+    if missing:
+        raise FileNotFoundError("Missing {} daily association-rate files: {}".format(
+            len(missing), ", ".join(missing[:5])))
+    fields = ["date", "net_sta", "num_picks", "num_associated_picks",
+              "num_unassociated_picks", "association_ratio"]
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    partial = output_path.with_suffix(output_path.suffix + ".partial")
+    count = 0
+    try:
+        with partial.open("w", newline="", encoding="utf-8") as fp:
+            writer = csv.DictWriter(fp, fieldnames=fields)
+            writer.writeheader()
+            for day, path in zip(days, paths):
+                seen = set()
+                with path.open(newline="", encoding="utf-8") as source:
+                    reader = csv.DictReader(source)
+                    if reader.fieldnames != fields:
+                        raise ValueError("Unexpected association-rate header: {}".format(path))
+                    for row in reader:
+                        if (row["date"] != day.isoformat() or not row["net_sta"]
+                                or row["net_sta"] in seen):
+                            raise ValueError("Invalid/duplicate station-date row: {}".format(path))
+                        seen.add(row["net_sta"])
+                        writer.writerow(row)
+                        count += 1
+        partial.replace(output_path)
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
+    print("association rates: {} station-dates | {}".format(count, output_path))
+    return output_path
+
+
 def combine_daily_association_outputs(
     assoc_root, time_range, output_catalog, output_phase
 ):
@@ -1060,6 +1104,10 @@ def combine_daily_association_outputs(
     start, end = parse_date_range(time_range)
     target_dates = dates_between(start, end)
     merged_dir = Path(assoc_root) / "merged"
+    combine_daily_association_rates(
+        assoc_root, time_range,
+        Path(output_phase).parent / ("association_rates_{}.csv".format(time_range)),
+    )
     _combine_files(
         [merged_dir / "catalog_{}.dat".format(date) for date in target_dates],
         output_catalog,

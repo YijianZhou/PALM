@@ -82,9 +82,9 @@ def median_valid(values, default=-1.0):
 
 
 def median_magnitude(values):
-    """Magnitudes may be negative; only nonfinite values are unavailable."""
-    valid = [float(value) for value in values if isfinite(float(value))]
-    return median(valid) if valid else float("nan")
+    """Preserve negative magnitudes except the reserved missing sentinel -1."""
+    from magnitude_qc import median_event_magnitude
+    return median_event_magnitude(values)
 
 
 def horizontal_distance_km(left, right):

@@ -5,6 +5,7 @@ import os
 import sys
 from datetime import timedelta
 from pathlib import Path
+from magnitude_qc import magnitude_parameters
 
 from data_pipeline_aws import to_associator_sta_dict
 from phase_merge import phase_file_counts
@@ -31,6 +32,7 @@ def get_assoc_params(cfg, subnet_name=None):
         params.update({
             name: getattr(cfg, name, None) for name in OPTIONAL_ASSOC_PARAM_NAMES
         })
+        params.update(magnitude_parameters(cfg))
         return params
 
     params = dict(configured.get("default", {}))
@@ -46,6 +48,7 @@ def get_assoc_params(cfg, subnet_name=None):
         )
     resolved = {name: params[name] for name in ASSOC_PARAM_NAMES}
     resolved.update({name: params.get(name) for name in OPTIONAL_ASSOC_PARAM_NAMES})
+    resolved.update(magnitude_parameters(cfg))
     return resolved
 
 
