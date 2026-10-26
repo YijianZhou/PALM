@@ -186,7 +186,7 @@ def write_phase_file(path, events, time_format_digits=6, catalog_path=None):
         )
         try:
             for event in sorted(events, key=lambda item: item["time"]):
-                header = "{},{:.5f},{:.5f},{:.1f},{:.2f}\n".format(
+                header = "{},{:.4f},{:.4f},{:.1f},{:.2f}\n".format(
                     format_time(event["time"], time_format_digits),
                     event["lat"], event["lon"], event["depth"], event["mag"],
                 )
@@ -484,7 +484,7 @@ def merge_phase_files(
     with phase_partial.open("w", encoding="utf-8") as phase_fp, \
             catalog_partial.open("w", encoding="utf-8") as catalog_fp:
         for event in merged:
-            header = "{},{:.5f},{:.5f},{:.1f},{:.2f}\n".format(
+            header = "{},{:.4f},{:.4f},{:.1f},{:.2f}\n".format(
                 format_time(event["time"], cfg.merge_time_format_digits),
                 event["lat"], event["lon"], event["depth"], event["mag"],
             )

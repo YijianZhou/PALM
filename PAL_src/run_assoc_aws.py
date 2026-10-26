@@ -14,9 +14,10 @@ from run_pick_aws import parse_time_range
 
 ASSOC_PARAM_NAMES = (
     "xy_margin", "xy_grid", "z_grids", "min_sta",
-    "ot_dev", "max_res", "max_drop", "vp",
+    "ot_dev", "max_res", "max_drop", "velo_mod",
 )
-OPTIONAL_ASSOC_PARAM_NAMES = ("lat_range", "lon_range")
+OPTIONAL_ASSOC_PARAM_NAMES = {"travel_time_table": None, "lat_range": None, "lon_range": None, "unique_stations": True,
+    "ot_grid_step_sec": 0.1, "ot_grid_max_width_sec": 1.0, "ot_grid_max_points": 10}
 
 
 def geometry_key(sta_dict):
@@ -30,7 +31,8 @@ def get_assoc_params(cfg, subnet_name=None):
     if configured is None:
         params = {name: getattr(cfg, name) for name in ASSOC_PARAM_NAMES}
         params.update({
-            name: getattr(cfg, name, None) for name in OPTIONAL_ASSOC_PARAM_NAMES
+            name: getattr(cfg, name, default)
+            for name, default in OPTIONAL_ASSOC_PARAM_NAMES.items()
         })
         params.update(magnitude_parameters(cfg))
         return params
@@ -47,7 +49,8 @@ def get_assoc_params(cfg, subnet_name=None):
             )
         )
     resolved = {name: params[name] for name in ASSOC_PARAM_NAMES}
-    resolved.update({name: params.get(name) for name in OPTIONAL_ASSOC_PARAM_NAMES})
+    resolved.update({name: params.get(name, default)
+                     for name, default in OPTIONAL_ASSOC_PARAM_NAMES.items()})
     resolved.update(magnitude_parameters(cfg))
     return resolved
 

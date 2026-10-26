@@ -5,84 +5,103 @@ procedure are in [CHANGELOG_INTERNAL.md](CHANGELOG_INTERNAL.md).
 
 ## Unreleased
 
-- 2026-10-01: PAL range exports include one integrated association-rate CSV
-  beside phase/catalog outputs, ready for training sample preparation.
+- Hide detailed PAL association attempt/cache counters at normal console
+  verbosity; retain them with console_verbosity="debug".
 
-### 2026-09-30: Unit-Gain Placeholder
+- Default routine picking and association console progress to 60 seconds,
+  including rapid date-completion updates; preserve immediate failure reports.
 
-- Treat gain 1.0 as missing calibration in local/AWS PAL and AI-PAL realtime
-  processing, including legacy gain layouts. Retain waveform picking but output
-  NaN station amplitude and exclude it from magnitude calculation if a selected
-  component is uncalibrated. Existing amplitudes require reprocessing.
-- AI-PAL repick version is advanced to invalidate previous repick completion
-  records. Regression tests cover unit gain on all or one component and both
-  AI-PAL/PALM calibration implementations.
+- Balance offline association dynamically across pending dates, retain worker
+  caches, report active dates, and fail promptly on unexpected worker exits.
 
-### 2026-09-30: PAL Magnitude QC
+- Avoid repeating failed association searches after unrelated events are found,
+  without restricting the spatial search or changing association thresholds.
 
-- Require three distinct valid station magnitude estimates and population std
-  <= 1.0, configurable with `mag_min_stations` and `mag_max_std`.
-- Replace unconditional worst-station removal with a spread check followed by
-  the median. Failed magnitude is -1 without discarding arrival picks or events;
-  missing-gain amplitudes remain NaN. Magnitude merging excludes the -1 sentinel
-  and retains other negative values. This supersedes the earlier NaN event-mag
-  convention for PAL; MFT magnitude estimation is unchanged.
-- Shared helper and parameter propagation cover local/AWS PAL and AI-PAL
-  realtime/reassociation. Repick completion checks include magnitude thresholds.
-  Tests cover the reported M6.56 case, missing amplitudes, distinct stations,
-  negative magnitudes, threshold boundaries and AI-PAL/PALM source parity.
+- Reuse decoded station travel-time tables during association instead of
+  repeatedly loading them; add flushed search diagnostics to daily logs.
 
-- 2026-09-29: Removed redundant waveform download examples from `2_run_mft`.
-  Use the shared `preprocess/` workflow before template cutting and MFT.
+- Added optional local `0_build_travel_time_table_eg.py` preparation with
+  editable settings at the top and a shared `PAL_src` helper; no separate
+  builder configuration file is needed.
 
-- Missing instrument gains no longer remove arrival-time picks. Same-band
-  location/epoch fallback is allowed; no cross-band gain borrowing. Uncalibrated
-  amplitudes are nan and excluded from event magnitude.
+- Use `nan` for unavailable station gains; gain `1` now correctly permits
+  already-calibrated data to contribute to magnitude. Missing-gain stations
+  remain usable for picking. Migrate older gain-1 placeholders before rerunning.
 
-- 2026-09-24: PAL amplitude QC no longer crashes on incomplete component
-  windows. Unavailable checks are recorded as `nan` and bypassed; available
-  failing checks still reject picks.
+- Adapt MFT P correlation windows to each station's template S arrival and
+  exclude search-boundary P/S differential times from hypoDD relocation by
+  default. Both behaviors are configurable; CPU and GPU paths are aligned.
 
-- Local picking exposes `threads_per_worker` for native numerical libraries,
-  matching the AWS control; example launchers default to 2.
+- Association now accepts only homogeneous `velo_mod=[Vp, Vs]` or a saved
+  `travel_time_table` (.paltt). Build layered-model tables separately; runtime
+  model-file inputs and `layered_model_options` have been removed from active
+  workflows. Existing saved tables and homogeneous settings remain compatible.
 
-- Local PAL picking now uses independent date-block processes instead of
-  station threads. Worker count controls date blocks; daily outputs and resume
-  checks are unchanged, with per-block logs and aggregate console progress.
+- Load precomputed P/S times from one `.paltt` file using optional
+  `travel_time_table`; skip unavailable station/cell pairs safely.
 
-- Simplified local PAL entry points to `1_run_pal_pick_eg.py` and
-  `2_run_pal_assoc_eg.py`; removed the redundant combined launcher.
+- Accept scalar `max_res=r` as shorthand for equal P/S residual limits `[r, r]`.
 
-- Local picking resumes without reading waveform tails for every skipped day;
-  previous-day context is loaded only when picking actually resumes.
+- PAL spatial association now checks both P and S arrivals. Configure homogeneous
+  `velo_mod=[5.9, 3.5]` (km/s) and `max_res=[res_p, res_s]` (seconds);
+  active workflow configs are migrated, retaining regional tolerances.
 
-- Fixed daily trigger-count ownership at buffered boundaries: pre-QC candidates
-  now use refined P time like accepted picks, avoiding false count failures.
+- Speed up PAL association with sliding-window station counts, local count
+  updates, stable pick indices, and reused per-cluster calculations. Existing
+  association settings and selection rules are preserved.
 
-- Local picking retains waveforms with missing gain locations/epochs, using
-  warned same-band gain fallback or uncalibrated counts as a last resort.
+- PAL now counts distinct stations by default (`unique_stations=True`) while
+  retaining alternative P-S pairs for spatial selection. Failed neighborhoods
+  yield to alternative centers; retries no longer discard their candidates.
+  Fix adaptive grid coverage and preserve internal location precision. Catalog
+  coordinates use four decimal places for lat/lon and one for depth.
 
-- Local PAL picking now prints live day/station progress and a 30-second
-  heartbeat while retaining detailed output in a line-buffered log.
+- GPU MFT can scan automatic template groups sequentially with
+  `template_num_groups` (default 1), loading only each group's required stations
+  to reduce daily waveform memory. Detection and final association rules remain
+  unchanged.
 
-- Daily PAL association now shares buffered picks across all subnets inside
-  parallel contiguous date blocks, eliminating per-subnet pick-file rereads.
+- PAL association now searches up to ten origin times at 0.1-second spacing
+  near the cluster median, bounded by its 5th-95th percentiles. Solutions maximize
+  associated count, then minimize median absolute P residual. Temporal step,
+  maximum span, and point count are configurable per subnet (defaults: 0.1 s,
+  1.0 s, and 10 points).
 
-- PAL configs explicitly use a 30 s association buffer. Local PAL examples
-  now enable cross-day association and pick halos, with bounded per-worker
-  daily pick caching. Association resumes detect buffer-policy changes.
 
-- Renamed PAL raw-waveform cleaning control to `to_clean`; legacy `to_prep`
-  configs and reader calls remain supported. Filtering is unchanged.
 
-- Unified configurable band/location selection (band first by default) and
-  fullfed-derived, time-dependent `NET.STA.BAND.LOC` gain inventories across
-  local and AWS PAL, AI-PAL realtime, and PALM MFT. Simplified files remain
-  supported; routine post-merge station-file reconciliation is unnecessary.
 
-- Fixed PAL event merging that discarded valid negative magnitudes. Missing
-  magnitudes now use `nan`, not the physically valid value -1. Existing
-  affected catalogs require magnitude recalculation; they are not auto-repaired.
+## v5.1 - Release Preparation
+
+Changes since v5.0. Prepared 2026-10-03; GitHub publication/tagging is performed separately.
+
+- Align shared PAL processing with current AI-PAL: configurable band/location
+  selection, epoch-aware NET.STA.BAND.LOC station/gain inventories, and continued
+  support for simplified station files. MFT also uses the unified station selection.
+- Preserve arrival picks when calibration is unavailable. Permit warned same-band
+  gain fallback, never cross-band borrowing, and treat unit-gain placeholders as
+  missing. Uncalibrated amplitudes are NaN and excluded from PAL magnitude estimates.
+- Add PAL magnitude QC: at least three distinct valid stations and population
+  standard deviation <=1.0 before taking the median. Failed magnitude is -1;
+  other negative magnitudes are retained. MFT magnitude estimation is unchanged.
+- Improve local PAL date-block parallelism, live progress, numerical-thread
+  controls and resume performance. Share buffered picks across association
+  subnets and fix trigger-count ownership at daily boundaries.
+- Simplify PAL picking/association entry points, make association buffering
+  explicit, and publish an integrated association-rate CSV beside range-level
+  catalog/phase outputs.
+- Rename waveform cleaning to to_clean (legacy to_prep remains supported), improve
+  incomplete-window amplitude handling, and consolidate waveform preparation
+  under preprocess rather than duplicate MFT download launchers.
+
+### Upgrade Notes
+
+- Update source and workflow configs together. Review station gain inventories,
+  buffer settings, and the current numbered launchers.
+- Reprocess affected data to correct earlier calibration/magnitude results;
+  existing products are not automatically repaired. Treat -1 as unavailable
+  magnitude in PAL catalog analysis, while retaining other negative magnitudes.
+- Future changes are recorded above under Unreleased, relative to v5.1. The
+  source/config/documentation fingerprint is in RELEASE_BASELINE.json.
 
 ## v5.0 - Release Preparation
 

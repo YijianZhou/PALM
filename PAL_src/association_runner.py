@@ -26,9 +26,10 @@ import runtime_console
 
 ASSOC_PARAM_NAMES = (
     "xy_margin", "xy_grid", "z_grids", "min_sta",
-    "ot_dev", "max_res", "max_drop", "vp",
+    "ot_dev", "max_res", "max_drop", "velo_mod",
 )
-OPTIONAL_ASSOC_PARAM_NAMES = ("lat_range", "lon_range")
+OPTIONAL_ASSOC_PARAM_NAMES = {"travel_time_table": None, "lat_range": None, "lon_range": None, "unique_stations": True,
+    "ot_grid_step_sec": 0.1, "ot_grid_max_width_sec": 1.0, "ot_grid_max_points": 10}
 ASSOCIATION_PICK_MATCH_TOL_SEC = 0.1
 
 def get_association_buffer_sec(cfg):
@@ -59,7 +60,8 @@ def get_assoc_params(cfg, subnet):
     if configured is None:
         params = {name: getattr(cfg, name) for name in ASSOC_PARAM_NAMES}
         params.update({
-            name: getattr(cfg, name, None) for name in OPTIONAL_ASSOC_PARAM_NAMES
+            name: getattr(cfg, name, default)
+            for name, default in OPTIONAL_ASSOC_PARAM_NAMES.items()
         })
         params.update(magnitude_parameters(cfg))
         return params
@@ -72,7 +74,8 @@ def get_assoc_params(cfg, subnet):
             subnet, ", ".join(missing)
         ))
     resolved = {name: params[name] for name in ASSOC_PARAM_NAMES}
-    resolved.update({name: params.get(name) for name in OPTIONAL_ASSOC_PARAM_NAMES})
+    resolved.update({name: params.get(name, default)
+                     for name, default in OPTIONAL_ASSOC_PARAM_NAMES.items()})
     resolved.update(magnitude_parameters(cfg))
     return resolved
 
@@ -201,6 +204,10 @@ def associate_subnet_picks(
             if associator_cache_lock is None:
                 associator = associator_cache.get(key)
                 if associator is None:
+                    # Retain only the current geometry per subnet, not every past epoch.
+                    for old_key in list(associator_cache):
+                        if old_key[0] == subnet and old_key != key:
+                            del associator_cache[old_key]
                     associator = associator_pal.PS_Pair_Assoc(
                         stations, **get_assoc_params(cfg, subnet)
                     )
@@ -209,10 +216,15 @@ def associate_subnet_picks(
                 with associator_cache_lock:
                     associator = associator_cache.get(key)
                     if associator is None:
+                        for old_key in list(associator_cache):
+                            if old_key[0] == subnet and old_key != key:
+                                del associator_cache[old_key]
                         associator = associator_pal.PS_Pair_Assoc(
                             stations, **get_assoc_params(cfg, subnet)
                         )
                         associator_cache[key] = associator
+            print('[assoc] date={} subnet={} buffered_picks={} stations={}'.format(
+                observed_date, subnet, len(picks), len(stations)), flush=True)
             associator.associate(picks, catalog_fp, phase_fp)
     os.replace(catalog_partial, output_catalog)
     os.replace(phase_partial, output_phase)
@@ -745,12 +757,17 @@ def _finalize_day(task):
 
 
 def _raw_worker(task):
+    global _RAW_CONTEXT
     run, worker_dates = task
-    cfg = run.config()
-    cfg._daily_pick_cache = OrderedDict()
-    associator_cache = {}
+    if _RAW_CONTEXT is None or _RAW_CONTEXT[0] != run:
+        cfg = run.config()
+        cfg._daily_pick_cache = OrderedDict()
+        _RAW_CONTEXT = (run, cfg, {})
+    _, cfg, associator_cache = _RAW_CONTEXT
     results = []
     for observed_date in worker_dates:
+        activity = '{}:{}'.format(os.getpid(), _date_code(observed_date))
+        _report_progress(activity, 'started')
         # Load lazily so a fully resumed date performs no pick I/O. All subnets
         # share this buffered array; associate_subnet_picks makes a filtered copy.
         day_data = {}
@@ -775,25 +792,44 @@ def _raw_worker(task):
             results.extend(_raw_subnet_worker(
                 (run, subnet, [observed_date]), cfg, associator_cache, get_day_picks
             ))
+        _report_progress(activity, 'idle')
     return results
 
 
 def _build_raw_tasks(run, worker_dates):
-    count = min(max(1, run.num_workers), len(worker_dates))
-    tasks = []
-    for index in range(count):
-        dates = worker_dates[len(worker_dates) * index // count:
-                             len(worker_dates) * (index + 1) // count]
-        tasks.append((run, dates))
-    return tasks
+    return [(run, [day]) for day in sorted(set(worker_dates))]
+
+
+def _partition_raw_tasks(items):
+    """Preflight completed dates without reading picks or building tables."""
+    pending, skipped = [], []
+    cfg = items[0][0].config()
+    for run, dates in items:
+        day = dates[0]
+        complete = True
+        for subnet in sorted(run.subnet_station_files):
+            done, failed = _status_paths(run, 'raw_status', day, subnet)
+            if not (_should_skip(run, done, failed, cfg)
+                    and _raw_catalog(run, subnet, day).exists()
+                    and _raw_phase(run, subnet, day).exists()):
+                complete = False
+                break
+        if complete:
+            skipped.append([('{}:{}'.format(subnet, _date_code(day)), 'skipped')
+                            for subnet in sorted(run.subnet_station_files)])
+        else:
+            pending.append((run, dates))
+    return pending, skipped
 
 
 _PROGRESS_QUEUE = None
+_RAW_CONTEXT = None
 
 
 def _init_progress(queue):
-    global _PROGRESS_QUEUE
+    global _PROGRESS_QUEUE, _RAW_CONTEXT
     _PROGRESS_QUEUE = queue
+    _RAW_CONTEXT = None
 
 
 def _report_progress(label, state):
@@ -810,11 +846,15 @@ def _progress_task(task):
 
 
 class _DayProgress:
-    def __init__(self, stage, total_days, subnets=1):
+    def __init__(self, stage, total_days, subnets=1, interval_sec=60):
+        self.interval_sec = float(interval_sec)
+        if not 0 < self.interval_sec < float('inf'):
+            raise ValueError('progress_interval_sec must be finite and positive')
         self.stage = stage
         self.total_days = total_days
         self.subnets = subnets
         self.seen = set()
+        self.active = {}
         self.days = {}
         self.counts = {"completed": 0, "skipped": 0, "failed": 0}
         self.started = time.monotonic()
@@ -822,6 +862,13 @@ class _DayProgress:
         self.last_done = 0
 
     def add(self, label, state):
+        if state in ('started', 'idle'):
+            pid, day = label.split(':', 1)
+            if state == 'started':
+                self.active[pid] = day
+            else:
+                self.active.pop(pid, None)
+            return
         if label in self.seen:
             return
         self.seen.add(label)
@@ -833,14 +880,15 @@ class _DayProgress:
     def show(self, force=False):
         done = sum(count == self.subnets for count in self.days.values())
         now = time.monotonic()
-        if not force and done < self.last_done + 10 and now - self.last_time < 30:
+        if not force and now - self.last_time < self.interval_sec:
             return
         runtime_console.log(
             "progress",
-            "{} | {} | days processed {}/{} | tasks completed={} skipped={} failed={} | elapsed {:.0f}s".format(
+            "{} | {} | days processed {}/{} | tasks completed={} skipped={} failed={} | elapsed {:.0f}s | active={}".format(
                 datetime.now().strftime("%Y-%m-%d %H:%M:%S"), self.stage,
                 done, self.total_days, self.counts["completed"],
                 self.counts["skipped"], self.counts["failed"], now - self.started,
+                ','.join('{}:{}'.format(pid, day) for pid, day in sorted(self.active.items())) or '-',
             ),
         )
         self.last_done = done
@@ -858,25 +906,45 @@ def _run_parallel(function, items, worker_count):
         "_merge_day": "merge (including halo days)",
         "_finalize_day": "finalization",
     }.get(function.__name__, function.__name__)
-    progress = _DayProgress(stage, total_days, subnets)
+    run = items[0][0] if isinstance(items[0], tuple) else None
+    interval = getattr(run.config(), 'progress_interval_sec', 60) if hasattr(run, 'config') else 60
+    progress = _DayProgress(stage, total_days, subnets, interval)
     progress.show(force=True)
+    skipped = []
+    if raw:
+        items, skipped = _partition_raw_tasks(items)
+        for rows in skipped:
+            for label, state in rows:
+                progress.add(label, state)
+        runtime_console.log('stage', 'association queue | pending_dates={} | effective_workers={}'.format(
+            len(items), min(worker_count, len(items))))
+        if not items:
+            progress.show(force=True)
+            return skipped
     queue = multiprocessing.Queue()
     try:
         with multiprocessing.Pool(
             processes=min(worker_count, len(items)),
             initializer=_init_progress, initargs=(queue,),
         ) as pool:
-            pending = pool.map_async(_progress_task, [(function, item) for item in items])
+            workers = list(pool._pool)
+            pending = pool.map_async(_progress_task, [(function, item) for item in items], chunksize=1)
             while not pending.ready():
+                dead = [(worker.pid, worker.exitcode) for worker in workers
+                        if worker.exitcode is not None]
+                if dead:
+                    raise RuntimeError('Association pool worker exited unexpectedly: {}; active dates: {}'.format(
+                        dead, progress.active))
                 try:
                     progress.add(*queue.get(timeout=0.2))
                 except Empty:
                     progress.show()
-            results = pending.get()
+            results = skipped + pending.get()
             # Reconcile notifications still in transit and preserve the original result shape.
             for result in results:
                 for label, state in result if isinstance(result, list) else [result]:
                     progress.add(label, state)
+            progress.active.clear()
             progress.show(force=True)
             return results
     finally:

@@ -72,6 +72,20 @@ nearest-epoch fallback; use the detailed inventory for strict time coverage.
 Do not combine conflicting static and dated rows for one selector.
 
 Four-column geometry-only rows imply gain=1 (already calibrated data only).
+An explicit gain of `1` is valid for data already in the expected physical
+units; it is no longer treated as a missing-response placeholder. Use literal
+`nan` for unavailable gains (common, component, or epoch layouts), for example:
+`NN.FMT.HN.,37.0,-118.0,1000,nan,nan,nan`.
+Unknown-gain waveform samples remain finite and usable for picking. A station
+with missing component calibration has amplitude `nan` and does not contribute
+to magnitude; existing minimum-station and magnitude-spread QC still applies.
+Zero and infinite gains are invalid in detailed inventories.
+
+**Migration:** regenerate inventories built with gain-1 placeholders, or
+replace only entries confirmed to lack response metadata with `nan`. Do not
+replace all gain-1 entries: some represent genuinely calibrated data.
+Existing outputs are not retroactively corrected; rerun affected processing.
+
 The inventory reader also accepts `4 + 5*N` columns containing repeated
 `gain_E,gain_N,gain_Z,start,end` blocks. Blank lines and `#` comments are allowed.
 

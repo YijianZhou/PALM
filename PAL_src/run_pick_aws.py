@@ -35,7 +35,7 @@ def build_picker(pal_source_dir, cfg):
     import picker_pal
 
     assoc_defaults = getattr(cfg, "subnet_assoc_params", {}).get("default", {})
-    picker_vp = getattr(cfg, "picker_vp", getattr(cfg, "vp", assoc_defaults.get("vp", 5.9)))
+    picker_vp = getattr(cfg, "picker_vp", getattr(cfg, "vp", assoc_defaults.get("velo_mod", [5.9, 3.5])[0]))
     picker_vs = getattr(cfg, "picker_vs", getattr(cfg, "vs", 3.45))
     picker = picker_pal.STA_LTA_Kurtosis(
         win_sta=cfg.win_sta, win_lta=cfg.win_lta,

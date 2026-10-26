@@ -25,7 +25,7 @@ def _is_warning(line):
         "warning:", "error:", "[warn]", "[error]", "bad ", "false ",
         "pipeline error ", "skip repick waveform ",
         "input data too short", "filter type not supported",
-        "no event waveform files ", "stale repick status ignored ",
+        "stale repick status ignored ",
     ))
 
 
@@ -42,6 +42,9 @@ class _FilteredConsole(object):
         if _is_warning(line):
             return True
         stripped = line.lstrip()
+        # Per-association search/cache diagnostics are debug output, not progress.
+        if stripped.startswith("[assoc]"):
+            return False
         if self.verbosity == "quiet":
             return stripped.startswith(("[output]", "[complete]"))
         return stripped.startswith("[")

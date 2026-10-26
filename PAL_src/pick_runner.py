@@ -20,7 +20,10 @@ def parse_date_range(time_range):
 
 class _LocalPickProgress:
     """Report to the original console, independently of redirected station logs."""
-    def __init__(self, stream, total_days):
+    def __init__(self, stream, total_days, interval_sec=60):
+        self.interval_sec = float(interval_sec)
+        if not 0 < self.interval_sec < float('inf'):
+            raise ValueError('progress_interval_sec must be finite and positive')
         self.stream, self.total_days = stream, total_days
         self.completed = self.skipped = 0
         self.state, self.day, self.stations, self.total_stations = "initializing", "-", 0, None
@@ -39,8 +42,6 @@ class _LocalPickProgress:
             self.stations, self.total_stations = stations, total_stations
             self.completed += state == "completed"
             self.skipped += state == "skipped"
-        if state in ("completed", "skipped"):
-            self.report()
 
     def report(self):
         with self.lock:
@@ -54,7 +55,7 @@ class _LocalPickProgress:
                   file=self.stream, flush=True)
 
     def _heartbeat(self):
-        while not self.stop.wait(30):
+        while not self.stop.wait(self.interval_sec):
             self.report()
 
     def __exit__(self, exc_type, exc, tb):
@@ -63,6 +64,8 @@ class _LocalPickProgress:
         if exc_type is not None:
             with self.lock:
                 self.state = "FAILED: {}".format(exc)
+            self.report()
+        else:
             self.report()
 
 
@@ -80,6 +83,7 @@ def run_parallel_local_pick(
 ):
     """Process contiguous date blocks independently, with serial stations."""
     from run_pick import run_pick
+    interval = getattr(config_factory(), 'progress_interval_sec', 60)
 
     start, end = parse_date_range(time_range)
     if include_association_halo:
@@ -100,7 +104,7 @@ def run_parallel_local_pick(
         print("PAL picking: {} date-block processes | one station at a time per process".format(
             min(int(num_workers), (end - start).days)), flush=True)
         print("Native numerical threads per worker: {}".format(threads_per_worker), flush=True)
-        with _LocalPickProgress(sys.stdout, (end - start).days) as progress:
+        with _LocalPickProgress(sys.stdout, (end - start).days, interval) as progress:
             run_blocks(start, end, num_workers, data_dir, station_file, pick_dir,
                        log_dir, config_factory, overwrite, progress,
                        threads_per_worker=threads_per_worker)
@@ -115,7 +119,7 @@ def run_parallel_local_pick(
             max(1, int(num_workers)), log_path
         )
     )
-    with _LocalPickProgress(sys.stdout, (end - start).days) as progress, \
+    with _LocalPickProgress(sys.stdout, (end - start).days, interval) as progress, \
             log_path.open("w", encoding="utf-8", buffering=1) as log_fp:
         with contextlib.redirect_stdout(log_fp), contextlib.redirect_stderr(log_fp):
             try:

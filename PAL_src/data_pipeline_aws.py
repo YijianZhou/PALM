@@ -377,14 +377,15 @@ def read_data_aws(
     output = Stream()
     for component, trace, gain_index in assignments:
         gain = station_metadata["gains"][gain_index]
-        if not np.isfinite(gain) or gain == 0:
+        if np.isinf(gain) or gain == 0:
             raise ValueError(
                 "invalid gain for {}: {}".format(station_metadata["net_sta"], gain)
             )
         if "inventory" not in station_metadata:
-            if gain == 1.0:
+            if np.isnan(gain):
                 trace.stats.gain_missing = True
-            trace.data = np.asarray(trace.data, dtype=np.float64) / gain
+            else:
+                trace.data = np.asarray(trace.data, dtype=np.float64) / gain
         if trace.stats.channel[1:2] in acceleration_instrument_codes:
             trace.detrend("demean").detrend("linear")
             trace.integrate(method="cumtrapz")

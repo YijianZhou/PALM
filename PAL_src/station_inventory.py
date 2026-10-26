@@ -55,13 +55,18 @@ def read_inventory(path):
                 raise ValueError('{}:{}: expected 4/5/7 or 4+5*N columns'.format(path, line))
             info = stations.setdefault(net_sta, coords + [{'epochs': []}])
             for block in blocks:
-                if not all(math.isfinite(x) and x != 0 for x in block[:3]) or block[3] >= block[4]:
+                if not all(math.isnan(x) or (math.isfinite(x) and x != 0) for x in block[:3]) or block[3] >= block[4]:
                     raise ValueError('{}:{}: invalid gain or epoch'.format(path, line))
                 epoch = dict(band=parts[2] if len(parts) >= 3 else None,
                              location=location_code(parts[3]) if len(parts) == 4 else None,
                              gains=block[:3], start=block[3], end=block[4], coordinates=coords)
                 epochs = info[3]['epochs']
-                if epoch not in epochs:
+                duplicate = any(
+                    all(epoch[key] == other[key] for key in epoch if key != 'gains')
+                    and all(a == b or (math.isnan(a) and math.isnan(b))
+                            for a, b in zip(epoch['gains'], other['gains']))
+                    for other in epochs)
+                if not duplicate:
                     for other in epochs:
                         if (other['band'], other['location']) == (epoch['band'], epoch['location']) and max(other['start'], epoch['start']) < min(other['end'], epoch['end']):
                             raise ValueError('{}:{}: conflicting overlapping epochs for {}'.format(path, line, row[0]))
@@ -126,9 +131,10 @@ def calibrate_trace(trace, metadata, allow_fallback=False):
         if selected is None:
             trace.stats.gain_missing = True
         gain = selected['gains']['ENZ'.index(component)] if selected else 1.0
-        # Unit gain is a missing-calibration placeholder, not an SI response.
-        if gain == 1.0:
+        # Unknown calibration keeps counts usable for picking, not magnitude.
+        if math.isnan(gain):
             trace.stats.gain_missing = True
+            gain = 1.0
         spans.append((left, right, gain))
     trace.data = np.asarray(trace.data, dtype=np.float64)
     for left, right, gain in spans:
