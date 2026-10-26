@@ -1,0 +1,43 @@
+{
+  "kind": "hypoinverse_datum",
+  "actual_models": [
+    "cvms"
+  ],
+  "depth_reference": "local_surface",
+  "grid_surface_elevations": {
+    "points": 9,
+    "min_km": 0.20838900000000002,
+    "max_km": 0.863491,
+    "median_km": 0.5454869999999999,
+    "mean_km": 0.5572562222222223
+  },
+  "representative_surface_elevation_km": 0.545487,
+  "reference_elevation_km": null,
+  "nonfirst_layer_top_shift_km": null,
+  "original_model_top_elevation_km": 0.545487,
+  "settings": {
+    "output": "hypoinverse_datum.json",
+    "model_type": "CRE",
+    "surface_elevation_method": "explicit",
+    "surface_elevation_km": 0.545487,
+    "reference_elevation_km": null,
+    "export_cre": false,
+    "acknowledge_approximate_surface": false,
+    "acknowledge_halfspace_extension": false,
+    "use_station_elevations": true,
+    "output_p": "hypoinverse_p.cre",
+    "output_s": "hypoinverse_s.cre",
+    "commands_output": "hypoinverse_models.hyp",
+    "p_model_number": 1,
+    "s_model_number": 2
+  },
+  "input_sha256": "068db3598687257d7c06dd62838e56cf2069da701b34ddec27bf387305d8d27a",
+  "formula": "CRE nonfirst top = original top + reference elevation - representative surface elevation; first top stays zero",
+  "notes": [
+    "Regional local-surface averaging is not equivalent to averaging at a common sea-level depth.",
+    "Grid median is a representative approximation, not a station datum or a uniform ground elevation.",
+    "CVM-H has a native DEM; saved UCVM surface elevation is not independently verified as the CVM-H native surface.",
+    "CRE earthquake depths are sea-level depths: do not apply this model-top shift to located events.",
+    "CRH/CRT GEO T uses an event-dependent station datum; no universal event-depth correction is exported."
+  ]
+}

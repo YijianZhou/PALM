@@ -1,0 +1,28 @@
+# Linux x86_64. Environment for building UCVM and running steps 1-3.
+# Keep the compiler versions consistent throughout the UCVM build.
+name: ucvm
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.11
+  - numpy
+  - matplotlib
+  - pytest
+  - pip
+  - perl
+  - certifi
+  - zlib
+  - gcc_linux-64=16.2
+  - gxx_linux-64=16.2
+  - gfortran_linux-64=16.2
+  - make
+  - autoconf
+  - automake
+  - libtool
+  - pkg-config
+  - cmake
+  - git
+  - curl
+  - wget
+  - ca-certificates

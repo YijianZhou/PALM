@@ -1,0 +1,39 @@
+{
+  "kind": "major_layer_maps",
+  "layers": [
+    {
+      "top_km": 0.0,
+      "bottom_km": 5.8,
+      "midpoint_km": 2.9,
+      "plotted_depth_km": 2.9
+    },
+    {
+      "top_km": 5.8,
+      "bottom_km": 16.3,
+      "midpoint_km": 11.05,
+      "plotted_depth_km": 11.05
+    },
+    {
+      "top_km": 16.3,
+      "bottom_km": 29.8,
+      "midpoint_km": 23.05,
+      "plotted_depth_km": 23.05
+    },
+    {
+      "top_km": 29.8,
+      "bottom_km": 50.0,
+      "midpoint_km": 39.9,
+      "plotted_depth_km": 39.9
+    }
+  ],
+  "settings": {
+    "enabled": true,
+    "output": "major_layer_velocity_maps.png",
+    "interpolation": "linear",
+    "cmap": "viridis",
+    "dpi": 180
+  },
+  "depth_reference": "local_surface",
+  "input_sha256": "068db3598687257d7c06dd62838e56cf2069da701b34ddec27bf387305d8d27a",
+  "artifact_sha256": "6b2cb627e80adcf978409b5bc7c4081d8ef5a730da6314d25dda19e43bcbb1a0"
+}

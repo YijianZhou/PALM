@@ -1,0 +1,7 @@
+{
+  "ucvm_install_prefix": "~/software/ucvm-25.7",
+  "runtime_prefix": null,
+  "bin_dir": "~/bin",
+  "workflow_dir": "..",
+  "workflow_config": "../config_eg.json"
+}

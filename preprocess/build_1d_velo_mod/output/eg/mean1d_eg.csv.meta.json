@@ -1,0 +1,440 @@
+{
+  "schema_version": 1,
+  "kind": "dense_1d",
+  "depth_reference": "local_surface",
+  "units": {
+    "depth": "km",
+    "velocity": "km/s"
+  },
+  "input_sha256": "068db3598687257d7c06dd62838e56cf2069da701b34ddec27bf387305d8d27a",
+  "extraction_metadata": {
+    "schema_version": 1,
+    "kind": "ucvm_samples",
+    "settings": {
+      "ucvm_query": "~/bin/ucvm_query",
+      "ucvm_conf": "~/software/ucvm-25.7/conf/ucvm.conf",
+      "model": "cvms",
+      "value_source": "crustal",
+      "depth_reference": "local_surface",
+      "longitude_deg": [
+        -119.5,
+        -119.4,
+        0.05
+      ],
+      "latitude_deg": [
+        35,
+        35.1,
+        0.05
+      ],
+      "depth_m": [
+        0,
+        50000,
+        500
+      ],
+      "batch_size": 50000,
+      "timeout_sec": 600,
+      "output": "ucvm_3d_eg.txt"
+    },
+    "rows": 909,
+    "actual_models": [
+      "cvms"
+    ],
+    "config": {
+      "case_name": "eg - regional 1D velocity model",
+      "overwrite": false,
+      "output_dir": "output/eg",
+      "extract": {
+        "ucvm_query": "~/bin/ucvm_query",
+        "ucvm_conf": "~/software/ucvm-25.7/conf/ucvm.conf",
+        "model": "cvms",
+        "value_source": "crustal",
+        "depth_reference": "local_surface",
+        "longitude_deg": [
+          -119.5,
+          -119.4,
+          0.05
+        ],
+        "latitude_deg": [
+          35,
+          35.1,
+          0.05
+        ],
+        "depth_m": [
+          0,
+          50000,
+          500
+        ],
+        "batch_size": 50000,
+        "timeout_sec": 600,
+        "output": "ucvm_3d_eg.txt"
+      },
+      "average": {
+        "input": "ucvm_3d_eg.txt",
+        "output": "mean1d_eg.csv",
+        "output_full": "mean1d_eg_full.txt",
+        "statistic": "median",
+        "require_full_depth_coverage": true,
+        "allow_legacy_input_without_metadata": false,
+        "smoothing_window_points": 1
+      },
+      "layers": {
+        "input": "mean1d_eg.csv",
+        "output": "layered_eg.csv",
+        "model_output": "velocity_model_1d.json",
+        "schedule_km": [
+          [
+            0,
+            8,
+            1
+          ],
+          [
+            8,
+            14,
+            1.5
+          ],
+          [
+            14,
+            16,
+            2
+          ],
+          [
+            16,
+            32,
+            4
+          ],
+          [
+            32,
+            42,
+            10
+          ],
+          [
+            42,
+            50,
+            8
+          ]
+        ],
+        "adaptive": true,
+        "min_thickness_km": 1,
+        "vp_variation_kmps": 0.35,
+        "vs_variation_kmps": 0.2,
+        "use_gradient_criterion": false,
+        "vp_gradient_per_sec": 0.6,
+        "vs_gradient_per_sec": 0.35,
+        "average_method": "mean",
+        "extend_last_layer_as_halfspace": false,
+        "method": "interfaces",
+        "interface_gradient_per_sec": 0.2,
+        "min_velocity_change_kmps": 0.1,
+        "depth_decimals": 1,
+        "velocity_decimals": 2,
+        "allow_low_velocity_zone": false,
+        "smooth_interfaces": true,
+        "transition_layers": 2,
+        "strong_transition_layers": 3,
+        "strong_interface_gradient_per_sec": 1,
+        "monotonic_transition_fallback": true,
+        "transition_velocity_method": "equal_steps",
+        "model_surface_elevation_km": 0.545487
+      },
+      "plot": {
+        "output": "velocity_model_eg.png",
+        "dpi": 180,
+        "reference_file": null,
+        "reference_format": "top_vp_vpvs",
+        "gradient_output": "velocity_gradient_eg.png"
+      },
+      "cre_export": {
+        "output_p": "velocity_p_eg.cre",
+        "output_s": "velocity_s_eg.cre",
+        "model_name": "EG_MEAN_1D",
+        "shift_nonfirst_layer_tops_km": 0,
+        "acknowledge_halfspace_extension": false
+      },
+      "maps": {
+        "enabled": true,
+        "output": "major_layer_velocity_maps.png",
+        "interpolation": "linear",
+        "cmap": "viridis",
+        "dpi": 180
+      },
+      "hypoinverse": {
+        "output": "hypoinverse_datum.json",
+        "model_type": "CRE",
+        "surface_elevation_method": "explicit",
+        "surface_elevation_km": 0.545487,
+        "reference_elevation_km": null,
+        "export_cre": false,
+        "acknowledge_approximate_surface": false,
+        "acknowledge_halfspace_extension": false,
+        "use_station_elevations": true,
+        "output_p": "hypoinverse_p.cre",
+        "output_s": "hypoinverse_s.cre",
+        "commands_output": "hypoinverse_models.hyp",
+        "p_model_number": 1,
+        "s_model_number": 2
+      }
+    },
+    "ucvm_conf_sha256": "b31a01a307a65dd4c24b120b8160360ad252e3850185537d5c6e74de63ae2d6a",
+    "ucvm_query_sha256": "58fee97dc35b2793a82c24dc427005c829aa80f8079330871e2809f75a49c91e",
+    "provenance": {
+      "method": "exact_grid_subset_of_saved_ucvm_extraction",
+      "source_artifact_sha256": "7eb70142adc9e14cee9f7e2d158252bcbc0c1de4515fd418353178b1254c0585",
+      "fresh_ucvm_query": false,
+      "interpolated": false,
+      "note": "Original UCVM values retained; no synthetic velocities."
+    },
+    "artifact_sha256": "068db3598687257d7c06dd62838e56cf2069da701b34ddec27bf387305d8d27a"
+  },
+  "legacy_datum_unverified": false,
+  "horizontal_weighting": "equal_sample",
+  "expected_points_per_depth": 9,
+  "sample_counts": [
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9,
+    9
+  ],
+  "incomplete_depths_m": [],
+  "settings": {
+    "input": "ucvm_3d_eg.txt",
+    "output": "mean1d_eg.csv",
+    "output_full": "mean1d_eg_full.txt",
+    "statistic": "median",
+    "require_full_depth_coverage": true,
+    "allow_legacy_input_without_metadata": false,
+    "smoothing_window_points": 1
+  },
+  "config": {
+    "case_name": "eg - regional 1D velocity model",
+    "overwrite": false,
+    "output_dir": "output/eg",
+    "extract": {
+      "ucvm_query": "~/bin/ucvm_query",
+      "ucvm_conf": "~/software/ucvm-25.7/conf/ucvm.conf",
+      "model": "cvms",
+      "value_source": "crustal",
+      "depth_reference": "local_surface",
+      "longitude_deg": [
+        -119.5,
+        -119.4,
+        0.05
+      ],
+      "latitude_deg": [
+        35,
+        35.1,
+        0.05
+      ],
+      "depth_m": [
+        0,
+        50000,
+        500
+      ],
+      "batch_size": 50000,
+      "timeout_sec": 600,
+      "output": "ucvm_3d_eg.txt"
+    },
+    "average": {
+      "input": "ucvm_3d_eg.txt",
+      "output": "mean1d_eg.csv",
+      "output_full": "mean1d_eg_full.txt",
+      "statistic": "median",
+      "require_full_depth_coverage": true,
+      "allow_legacy_input_without_metadata": false,
+      "smoothing_window_points": 1
+    },
+    "layers": {
+      "input": "mean1d_eg.csv",
+      "output": "layered_eg.csv",
+      "model_output": "velocity_model_1d.json",
+      "schedule_km": [
+        [
+          0,
+          8,
+          1
+        ],
+        [
+          8,
+          14,
+          1.5
+        ],
+        [
+          14,
+          16,
+          2
+        ],
+        [
+          16,
+          32,
+          4
+        ],
+        [
+          32,
+          42,
+          10
+        ],
+        [
+          42,
+          50,
+          8
+        ]
+      ],
+      "adaptive": true,
+      "min_thickness_km": 1,
+      "vp_variation_kmps": 0.35,
+      "vs_variation_kmps": 0.2,
+      "use_gradient_criterion": false,
+      "vp_gradient_per_sec": 0.6,
+      "vs_gradient_per_sec": 0.35,
+      "average_method": "mean",
+      "extend_last_layer_as_halfspace": false,
+      "method": "interfaces",
+      "interface_gradient_per_sec": 0.2,
+      "min_velocity_change_kmps": 0.1,
+      "depth_decimals": 1,
+      "velocity_decimals": 2,
+      "allow_low_velocity_zone": false,
+      "smooth_interfaces": true,
+      "transition_layers": 2,
+      "strong_transition_layers": 3,
+      "strong_interface_gradient_per_sec": 1,
+      "monotonic_transition_fallback": true,
+      "transition_velocity_method": "equal_steps",
+      "model_surface_elevation_km": 0.545487
+    },
+    "plot": {
+      "output": "velocity_model_eg.png",
+      "dpi": 180,
+      "reference_file": null,
+      "reference_format": "top_vp_vpvs",
+      "gradient_output": "velocity_gradient_eg.png"
+    },
+    "cre_export": {
+      "output_p": "velocity_p_eg.cre",
+      "output_s": "velocity_s_eg.cre",
+      "model_name": "EG_MEAN_1D",
+      "shift_nonfirst_layer_tops_km": 0,
+      "acknowledge_halfspace_extension": false
+    },
+    "maps": {
+      "enabled": true,
+      "output": "major_layer_velocity_maps.png",
+      "interpolation": "linear",
+      "cmap": "viridis",
+      "dpi": 180
+    },
+    "hypoinverse": {
+      "output": "hypoinverse_datum.json",
+      "model_type": "CRE",
+      "surface_elevation_method": "explicit",
+      "surface_elevation_km": 0.545487,
+      "reference_elevation_km": null,
+      "export_cre": false,
+      "acknowledge_approximate_surface": false,
+      "acknowledge_halfspace_extension": false,
+      "use_station_elevations": true,
+      "output_p": "hypoinverse_p.cre",
+      "output_s": "hypoinverse_s.cre",
+      "commands_output": "hypoinverse_models.hyp",
+      "p_model_number": 1,
+      "s_model_number": 2
+    }
+  },
+  "artifact_sha256": "329070db5157f89bf04b9cb9b4e160562bc3a9af9cfadfb4eae6083cc532c4bc"
+}
