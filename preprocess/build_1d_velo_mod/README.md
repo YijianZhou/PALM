@@ -57,8 +57,12 @@ set `overwrite = true` deliberately when rebuilding existing model products.
 ## Input to the PAL Travel-Time Builder
 
 **Provide the step-2 `output/eg/velocity_model_1d.json` as `MODEL_FILE`.**
-Do not supply the extracted 3D text, dense/layered CSV, `hypoinverse_datum.json`,
-or P/S `.cre` files. Step 3 is not needed for PAL travel-time preparation.
+JSON is the simplest handoff because it retains layer bottoms and datum.
+The builder also accepts the layered CSV or paired P/S CRE files with explicit
+model-format, datum and bottom settings; see [supported input formats](../../PAL_src/VELOCITY_MODEL_FORMATS.md).
+Do not supply extracted 3D text or hypoinverse_datum.json. Step 3 is not needed
+when using JSON/CSV. Dense CSV samples would be treated as layer tops, not a
+continuous velocity gradient.
 
 For `1_run_pal/run_pal_local/0_build_travel_time_table_eg.py` in either package,
 or AI-PAL's `3_run_ai_pal/run_ai_pal_local/0_build_travel_time_table_eg.py`, set:
@@ -73,7 +77,7 @@ default `MODEL_FILE`. Both packages contain the same preparation scripts and
 example config. Each builder can use the JSON produced within its own package,
 or an absolute path to a shared model file.
 
-The current builder requires `depth_reference = "local_surface"`,
+For JSON input, the current builder requires `depth_reference = "local_surface"`,
 `depth_positive = "down"`, `interpolation = "piecewise_constant"`, units of km
 and km/s, a finite `model_surface_elevation_km`, and contiguous layers starting
 at zero with `Vp > Vs > 0`. The extractor can also produce sea-level profiles,

@@ -4,12 +4,22 @@ import sys
 
 # USER SETTINGS: paths relative to this script, except the installed package root.
 PAL_ROOT = Path(__file__).resolve().parents[2]
-MODEL_FILE = 'input/velocity_model_1d.json'  # Layered-model JSON, km and km/s, with surface datum.
+# Bundled step-2 example JSON; replace with your regional model for real work.
+# CSV or paired CRE are also supported with the model-input settings below.
+MODEL_FILE = 'input/velocity_model_1d.json'  # JSON/CSV or P CRE, km and km/s.
 STATION_FILE = 'input/example_pal_format4.sta'
 ASSOCIATION_CONFIG = 'config_eg.py'
 SUBNET = 'full'  # Association grid to inherit when an override below is None.
 OUTPUT_DIR = 'output/travel_time_table_eg'  # Must be new for every rebuild.
 TABLE_DESTINATION = 'input/travel_time_table.paltt'
+
+# USER SETTINGS: model input (preparation only, not runtime association config).
+MODEL_FORMAT = 'auto'  # auto by .json/.csv/.cre, or explicit json/csv/cre.
+MODEL_S_FILE = None  # CRE only: S model path; MODEL_FILE is the P CRE model.
+MODEL_REFERENCE_ELEVATION_KM = None  # Required for CSV/CRE: depth-zero elevation above MSL, km.
+MODEL_BOTTOM_DEPTH_KM = None  # CSV/CRE finite policy: bottom > last top, km below model zero.
+# JSON: leave the three settings above None; embedded datum/layers are used.
+# Halfspace CSV/CRE: bottom may be None. See PAL_src/VELOCITY_MODEL_FORMATS.md.
 
 # USER SETTINGS: grid and datum. None inherits the association config.
 LAT_RANGE_DEG = None  # [min, max], degrees within [-90, 90].
@@ -34,6 +44,9 @@ OVERWRITE_TABLE = False  # Boolean: allow replacing TABLE_DESTINATION, not OUTPU
 def build_settings():
     return {
         'model_file': MODEL_FILE, 'station_file': STATION_FILE, 'output_dir': OUTPUT_DIR,
+        'model_format': MODEL_FORMAT, 'model_s_file': MODEL_S_FILE,
+        'model_reference_elevation_km': MODEL_REFERENCE_ELEVATION_KM,
+        'model_bottom_depth_km': MODEL_BOTTOM_DEPTH_KM,
         'table_file': Path(TABLE_DESTINATION).name,
         'grid': {'workflow_config': ASSOCIATION_CONFIG, 'subnet': SUBNET,
                  'lat_range_deg': LAT_RANGE_DEG, 'lon_range_deg': LON_RANGE_DEG,

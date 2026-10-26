@@ -19,6 +19,7 @@ from sagemaker.core.shapes import (
 )
 
 from processing_job.job_common import prefix_has_objects, upload_tree
+from processing_job.table_staging import stage_table_config
 
 
 # ============================================================================
@@ -225,7 +226,7 @@ def main():
         (work_stage / "input").mkdir(parents=True)
         source_stage.mkdir(parents=True)
 
-        shutil.copy2(local_config, work_stage / case_config_file)
+        stage_table_config(local_config, work_stage / case_config_file, work_stage / "input" / "travel_time_tables", "/opt/ml/processing/work/input/travel_time_tables")
         shutil.copy2(requirements, work_stage / "requirements.txt")
         (work_stage / "assoc_runtime.json").write_text(
             json.dumps(runtime, indent=2, sort_keys=True) + "\n",

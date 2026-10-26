@@ -185,6 +185,45 @@ def json_model_surface(path):
                      'JSON model_surface_elevation_km (regenerate step 2 or add its known datum)')
 
 
+def load_velocity_model(cfg, paths):
+    """Normalize preparation-only model formats and capture source provenance."""
+    fmt = cfg.get('model_format', 'auto')
+    if fmt == 'auto':
+        fmt = paths['model_file'].suffix.lower().lstrip('.')
+    if fmt not in ('json', 'csv', 'cre'):
+        raise ValueError('model_format must be auto (.json/.csv/.cre), json, csv, or cre')
+    datum = cfg['datum']
+    keys = ['model_file'] + (['model_s_file'] if 'model_s_file' in paths else [])
+    hashes = {key: sha256(paths[key]) for key in keys}
+    height = cfg.get('model_reference_elevation_km')
+    bottom = cfg.get('model_bottom_depth_km')
+    if fmt == 'json':
+        if height is not None or bottom is not None or 'model_s_file' in paths:
+            raise ValueError('JSON uses its embedded datum/layers; leave CSV/CRE-only settings None')
+        height = json_model_surface(paths['model_file'])
+        model = LayerModel.load(paths['model_file'], datum)
+        snapshot = read_json(paths['model_file'])
+    else:
+        from velocity_model_input import layer_arrays
+        height = elevation(height, 'model_reference_elevation_km (model depth zero above MSL)')
+        arrays = layer_arrays(fmt, paths['model_file'], paths.get('model_s_file'),
+                              bottom, datum['bottom_policy'])
+        model = LayerModel(*arrays, datum['top_extension'], datum['bottom_policy'])
+        snapshot = dict(kind='normalized_layered_velocity_model', input_format=fmt,
+                        units=dict(depth='km', velocity='km/s'), depth_positive='down',
+                        depth_reference='model_zero', model_reference_elevation_km=height,
+                        bottom_policy=datum['bottom_policy'], layers=[
+                            dict(top_depth_km=float(t), bottom_depth_km=float(b) if np.isfinite(b) else None,
+                                 vp_kmps=float(p), vs_kmps=float(s))
+                            for t,b,p,s in zip(*arrays)])
+    for key, digest in hashes.items():
+        if sha256(paths[key]) != digest:
+            raise RuntimeError('Velocity model changed while reading; use stable input files')
+    datum['model_surface_elevation_km'] = height  # Existing solver's model-zero offset.
+    model.input_hashes, model.source_snapshot = hashes, snapshot
+    return model
+
+
 def config_literal(node):
     """Read PAL settings without executing workflow imports or arbitrary code."""
     if isinstance(node, ast.Dict):
@@ -251,12 +290,14 @@ def prepare(config_path, settings=None):
         p = Path(value).expanduser()
         return p.resolve() if p.is_absolute() else (base/p).resolve()
     paths = {k: resolve(cfg[k]) for k in ("model_file", "station_file", "output_dir")}
+    if cfg.get('model_s_file') is not None:
+        paths['model_s_file'] = resolve(cfg['model_s_file'])
     paths["workflow_config"] = resolve(cfg["grid"]["workflow_config"])
     paths["config"] = config_path
     if Path(cfg["table_file"]).name != cfg["table_file"] or not cfg["table_file"].endswith(".paltt"):
         raise ValueError("table_file must be a filename ending in .paltt")
     datum, solver = cfg["datum"], cfg["solver"]
-    datum["model_surface_elevation_km"] = json_model_surface(paths["model_file"])
+    model = load_velocity_model(cfg, paths)
     if datum["source_depth_reference"] != "mean_sea_level":
         raise ValueError("source_depth_reference must be mean_sea_level for PAL")
     if isinstance(datum["model_surface_elevation_km"], bool) or not np.isfinite(datum["model_surface_elevation_km"]):
@@ -265,7 +306,6 @@ def prepare(config_path, settings=None):
         positive(solver[key], key, key in ("max_iterations", "batch_size"))
     if solver["distance_metric"] != "pal_local":
         raise ValueError("Only pal_local distance metric is supported")
-    model = LayerModel.load(paths["model_file"], datum)
     stations = read_stations(paths["station_file"])
     settings = workflow_grid(paths["workflow_config"], cfg["grid"]["subnet"])
     grid = cfg["grid"]
@@ -316,7 +356,7 @@ def build(config_path, dry_run=False, settings=None):
     print(json.dumps(summary, indent=2), flush=True)
     if dry_run:
         return summary
-    model_input_hash = sha256(paths["model_file"])
+    model_input_hashes = model.input_hashes
     output = paths["output_dir"]
     if output.exists():
         raise FileExistsError(f"{output} already exists; choose a new output_dir to rebuild")
@@ -350,9 +390,10 @@ def build(config_path, dry_run=False, settings=None):
         total += len(tp)
         print(f"{k+1}/{len(stations)} {station['station_id']}: {len(tp)} source cells", flush=True)
     summary.update(covered_source_station_pairs=total, possible_source_station_pairs=int(np.prod(shape))*len(stations))
-    model_snapshot = read_json(paths['model_file'])
-    if sha256(paths['model_file']) != model_input_hash:
-        raise RuntimeError('Model JSON changed during calculation; rebuild from a stable input')
+    model_snapshot = model.source_snapshot
+    for key, digest in model_input_hashes.items():
+        if sha256(paths[key]) != digest:
+            raise RuntimeError('Model JSON/CSV/CRE changed during calculation; rebuild from stable inputs')
     manifest = dict(schema_version=1, kind='pal_sparse_ps_travel_time_table',
                     created_utc=datetime.now(timezone.utc).isoformat(), solver='flat_layers_direct_and_head_waves',
                     units=dict(distance='km', time='s', station_elevation='m'),

@@ -41,7 +41,8 @@ class Config(object):
     # Existing regional tolerances are preserved for P and initially also used for S.
     self.subnet_assoc_params = {
         "default": {
-            "travel_time_table": None,  # .paltt path takes precedence; None/numeric NaN builds from velo_mod.
+            # Build locally with step 0; AWS stages literal paths relative to this folder.
+            "travel_time_table": None,  # None: velo_mod; or 'input/travel_time_table.paltt'.
             # velo_mod: homogeneous [Vp, Vs] km/s; build layered-model tables separately.
             "unique_stations": True,  # Count stations; retain alternative pairs for spatial search.
             "ot_grid_step_sec": 0.1,

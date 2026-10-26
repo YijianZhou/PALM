@@ -1,11 +1,5 @@
 # PAL Source
 
-Console detail is controlled by the existing `console_verbosity` setting:
-`default` retains workflow progress and warnings but hides detailed `[assoc]`
-attempt/cache/per-call completion diagnostics; `debug` displays them; `quiet`
-retains warnings and final output/completion messages. Association results are
-unchanged. No additional logging parameter is required.
-
 Shared current rule-based PAL implementation used by the local and AWS
 executables in `../1_run_pal/`. It contains waveform readers, STA/LTA and
 kurtosis picking, association, phase merging, trigger inventories, and reusable
@@ -15,6 +9,19 @@ The source is synchronized from AI-PAL's rule-based PAL modules. PALM does not
 duplicate AI model packages, training code, or real-time AI inference here.
 `pick_ensemble.py` is retained because current phase merging understands the
 extended pick schema even when a PAL-only workflow produces legacy PAL picks.
+
+## Console Reporting
+
+Console detail is controlled by the existing `console_verbosity` setting:
+`default` retains workflow progress and warnings but hides detailed `[assoc]`
+attempt/cache/per-call completion diagnostics; `debug` displays them; `quiet`
+retains warnings and final output/completion messages. Association results are
+unchanged. No additional logging parameter is required.
+
+Missing event waveform files are expected for inactive stations and are shown
+only with the existing `console_verbosity = "debug"` setting. Default and quiet
+console modes suppress these messages; gain fallback, malformed-channel and
+other warnings remain visible.
 
 ## Origin-time and spatial association
 
@@ -141,7 +148,28 @@ counting and median-scoring batches. No pick-by-entire-grid residual cache is
 introduced. These are automatic implementation optimizations, with no new tuning
 parameters; all existing config settings and deterministic tie rules remain.
 
+Association also remembers failed location searches by exact ordered pick
+membership for the duration of each association call. Removing picks invalidates
+only failures containing those picks; unchanged failures are reused. Spatial
+search bounds and scientific settings are unchanged. The diagnostic
+`failure_cache_hits` counts candidate neighborhoods skipped using this cache
+(including duplicate centers), not distinct cached clusters.
+
+Saved-table association retains decoded P/S arrays on first station use and
+reuses them across searches and dates with unchanged station geometry. Each
+worker has its own cache; budget about 625 MiB for 182 stations on a 225,216-cell
+float64 P/S grid, in addition to other worker memory. The buffered runner retires
+old geometry caches per subnet. No association thresholds or config defaults
+change. With debug console verbosity, daily logs include input counts, exponentially
+spaced attempt diagnostics, and a completion summary. Table-load time is cumulative for the
+current cache; location-search time includes table loading.
+
 ## Precomputed layered-model travel times
+
+Preparation accepts layered JSON, combined depth/Vp/Vs CSV, or paired P/S CRE
+models. See [Velocity Model Input Formats](VELOCITY_MODEL_FORMATS.md) for
+launcher-only settings, units, model-zero elevation and bottom policy. UCVM
+extraction is optional; runtime association still takes only the saved .paltt.
 
 Association has two modes: homogeneous `velo_mod=[Vp, Vs]` in km/s, or
 `travel_time_table="path/to/table.paltt"`. Default is homogeneous [5.9, 3.5].

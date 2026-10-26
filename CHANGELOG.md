@@ -5,6 +5,15 @@ procedure are in [CHANGELOG_INTERNAL.md](CHANGELOG_INTERNAL.md).
 
 ## Unreleased
 
+- AWS workflows now include a local step-0 travel-time table builder (JSON,
+  CSV or paired CRE); submissions automatically upload configured .paltt files.
+
+- Build PAL travel-time tables from combined Vp/Vs CSV or paired P/S CRE,
+  as well as JSON, with explicit preparation-only datum/bottom settings.
+
+- Include the same configurable 1D velocity-model preprocessing example as
+  AI-PAL, with a documented JSON handoff to PAL travel-time-table preparation.
+
 - Hide detailed PAL association attempt/cache counters at normal console
   verbosity; retain them with console_verbosity="debug".
 
