@@ -114,6 +114,10 @@ legacy mode to maintain a complete multi-selector inventory.
 
 ### 2 Validate and merge the raw data
 
+Daily trimming uses the strict half-open UTC interval [midnight, next
+midnight), including traces whose samples are offset from the midnight grid.
+No sample from the preceding or following day is retained.
+
 Edit and run `2_merge_raw_data_eg.py`. This is the publication step. It applies
 the same structural safeguards used by the AWS PAL reader:
 

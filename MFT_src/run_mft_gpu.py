@@ -10,6 +10,8 @@ from dataset_gpu import load_raw_tail_cache, read_temp, read_data
 from mft_lib_gpu import mft_det, cc_pick, write_ctlg, write_pha
 from rolling_waveform import processing_bounds
 import config
+from template_groups import (validate_group_count, partition_templates,
+                             group_station_dicts, scan_grouped_day)
 import warnings
 warnings.filterwarnings("ignore")
 mp.set_sharing_strategy('file_system')
@@ -38,6 +40,7 @@ if __name__ == '__main__':
 
   # MFT params
   cfg = config.Config()
+  num_groups = validate_group_count(getattr(cfg, 'template_num_groups', 1))
   min_sta = cfg.min_sta
   print(
       'sample rates: {} Hz GPU detection, {} Hz CPU phase picking'.format(
@@ -57,6 +60,12 @@ if __name__ == '__main__':
   sta_dict = cfg.get_sta_dict(args.sta_file)
   # read templates
   temp_list = read_temp(args.temp_pha, args.temp_root)
+  groups = partition_templates(temp_list, num_groups)
+  station_groups = group_station_dicts(temp_list, groups, sta_dict)
+  required_stations = {s: v for stations in station_groups for s, v in stations.items()}
+  print('template groups: {} requested, {} active'.format(num_groups, len(groups)))
+  for index, (group, stations) in enumerate(zip(groups, station_groups), 1):
+    print('group {}: {} templates | {} stations'.format(index, len(group), len(stations)))
   # get time range
   start_date, end_date = [UTCDateTime(date) for date in args.time_range.split('-')]
   print('run MFT (GPU version)')
@@ -64,7 +73,7 @@ if __name__ == '__main__':
   # for all days
   num_day = (end_date.date - start_date.date).days
   previous_raw_tails = load_raw_tail_cache(
-      start_date - 86400, args.data_dir, sta_dict,
+      start_date - 86400, args.data_dir, required_stations,
       buffer_seconds=data_buffer_sec,
   )
   for day_idx in range(num_day):
@@ -75,14 +84,10 @@ if __name__ == '__main__':
     print('detecting %s'%date.date)
     data_start = date - 2.0 * data_buffer_sec
     output_start, output_end = processing_bounds(date, data_buffer_sec)
-    data_dict, next_raw_tails = read_data(
-        date, args.data_dir, sta_dict, buffer_seconds=data_buffer_sec,
-        previous_raw_tails=previous_raw_tails,
-    )
-    previous_raw_tails = next_raw_tails
-    if len(data_dict)<min_sta: continue
-    # for all templates
-    for [temp_name, temp_loc, temp_pick_dict] in temp_list:
+    def scan_group(group, data_dict):
+      if len(data_dict)<min_sta: return
+      for template_index in group:
+        temp_name, temp_loc, temp_pick_dict = temp_list[template_index]
         # mft det
         print('template {}'.format(temp_name))
         dets = mft_det(temp_pick_dict, data_dict)
@@ -99,6 +104,9 @@ if __name__ == '__main__':
                 print('{0[0]:<7} | dt_p {0[3]:<5.2f}s, dt_s {0[4]:<5.2f}s | cc_p {0[6]:.3f}, cc_s {0[7]:.3f}, cc_det_phase {0[8]:.3f}'.format(picks[i]))
             write_ctlg(det_ot, det_cc, temp_name, temp_loc, out_ctlg)
             write_pha(det_ot, det_cc, temp_name, temp_loc, picks, out_pha)
-    del data_dict
+    previous_raw_tails = scan_grouped_day(
+        date, args.data_dir, groups, station_groups, previous_raw_tails,
+        data_buffer_sec, read_data, scan_group, torch.cuda.empty_cache,
+    )
   out_ctlg.close()
   out_pha.close()

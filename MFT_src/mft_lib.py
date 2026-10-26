@@ -4,9 +4,11 @@ import os, time
 from scipy.signal import correlate
 import numpy as np
 import config
+from phase_window_qc import trim_p_template, validate_phase_qc
 
 # MFT params
 cfg = config.Config()
+validate_phase_qc(cfg)
 min_sta = cfg.min_sta
 freq_band = cfg.freq_band
 samp_rate = cfg.samp_rate
@@ -92,7 +94,12 @@ def cc_pick(det_ot, temp_pick_dict, data_dict):
             temp_win_det_phase[0] + pick_win_p[0],
             temp_win_det_phase[1] + pick_win_p[1],
         ]
-        p_range = [temp_win_p[0] + pick_win_p[0], temp_win_p[1] + pick_win_p[1]]
+        temp[1], norm_temp[1] = trim_p_template(
+            temp[1], norm_temp[1], temp_win_p[0], dt_list[2] - dt_list[1],
+            getattr(cfg, 'adaptive_p_window', True),
+        )
+        p_range = [temp_win_p[0] + pick_win_p[0],
+                   temp[1].shape[-1] - temp_win_p[0] + pick_win_p[1]]
         s_range = [temp_win_s[0] + pick_win_s[0], temp_win_s[1] + pick_win_s[1]]
         tp0, ts0 = int(det_ot + dt_list[1]), int(det_ot + dt_list[2])
         if tp0 < max(det_range[0], p_range[0]) or ts0 < s_range[0] \

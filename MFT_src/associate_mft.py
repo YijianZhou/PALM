@@ -12,6 +12,7 @@ from obspy import UTCDateTime
 
 import config
 from template_store import read_ftemp
+from phase_window_qc import reliable_phase_shift, validate_phase_qc
 
 
 @dataclass
@@ -267,6 +268,7 @@ def associate_detections(detections, templates, station_dict, cfg):
 
 
 def differential_observations(event, cfg):
+  validate_phase_qc(cfg)
   pairs = []
   for detection in event.neighbors:
     origin_correction = detection.origin_time - event.origin_time
@@ -276,12 +278,18 @@ def differential_observations(event, cfg):
       dt_p = pick.dt_p + origin_correction
       dt_s = pick.dt_s + origin_correction
       if (
-          abs(dt_p) <= cfg.association_max_phase_shift_sec[0]
+          reliable_phase_shift(
+              pick.dt_p, cfg.pick_win_p, cfg.phase_samp_rate,
+              getattr(cfg, 'reject_boundary_phase_shifts', True))
+          and abs(dt_p) <= cfg.association_max_phase_shift_sec[0]
           and pick.cc_p >= cfg.association_phase_cc_min
       ):
         observations.append((station, dt_p, math.sqrt(pick.cc_p), "P"))
       if (
-          abs(dt_s) <= cfg.association_max_phase_shift_sec[1]
+          reliable_phase_shift(
+              pick.dt_s, cfg.pick_win_s, cfg.phase_samp_rate,
+              getattr(cfg, 'reject_boundary_phase_shifts', True))
+          and abs(dt_s) <= cfg.association_max_phase_shift_sec[1]
           and pick.cc_s >= cfg.association_phase_cc_min
       ):
         observations.append((station, dt_s, math.sqrt(pick.cc_s), "S"))
@@ -397,6 +405,7 @@ def main():
   args = parser.parse_args()
 
   cfg = config.Config()
+  validate_phase_qc(cfg)
   if cfg.association_origin_time_tolerance_sec <= 0:
     raise ValueError("association origin-time tolerance must be positive")
   if not 0 <= cfg.association_detection_cc_min <= 1:

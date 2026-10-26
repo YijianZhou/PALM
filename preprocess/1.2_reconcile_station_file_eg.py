@@ -111,7 +111,7 @@ def read_fullfed_records(paths):
                     latitude, longitude, elevation = [
                         float(value) for value in codes[4:7]
                     ]
-                    gain = float(codes[11])
+                    gain = float(codes[11].strip() or "nan")
                     start = UTCDateTime(codes[-2])
                     end = UTCDateTime(codes[-1]) if codes[-1] else None
                 except (TypeError, ValueError):

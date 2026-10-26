@@ -161,8 +161,11 @@ def read_candidate(paths, net, sta, location, channel, day):
     if len(stream) != 1:
         raise ValueError("expected one merged trace, found {}".format(len(stream)))
     trace = stream[0]
-    day_last_sample = day + 86400 - 1.0 / target_rate
-    trace.trim(day, day_last_sample, nearest_sample=True)
+    # Keep only samples in the half-open UTC day, including off-grid traces.
+    day_end = day + 86400
+    trace.trim(day, day_end, nearest_sample=False)
+    if len(trace) and trace.stats.endtime >= day_end:
+        trace.data = trace.data[:-1]
     if not len(trace):
         raise ValueError("merged trace is empty after daily trim")
     if not np.all(np.isfinite(trace.data)):

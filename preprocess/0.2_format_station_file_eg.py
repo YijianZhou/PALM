@@ -51,7 +51,7 @@ def read_fullfed(fsta):
             continue
         try:
             lat, lon, ele = [float(code) for code in codes[4:7]]
-            gain = float(codes[11])
+            gain = float(codes[11].strip() or "nan")
             t0 = UTCDateTime(codes[-2])
             t1 = UTCDateTime(codes[-1]) if codes[-1] else t_max
         except (TypeError, ValueError):
