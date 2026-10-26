@@ -1,5 +1,34 @@
 # Run PAL
 
+## Optional layered-model travel-time preparation
+
+Run `run_pal_local/0_build_travel_time_table_eg.py` before association when
+using a layered model. Edit its top-of-file settings: supply your model JSON
+at `MODEL_FILE`, station inventory and association config; there is no separate
+builder config. The helper is `PAL_src/travel_time_table.py`.
+The example model path is a user-supplied input, not a bundled regional model.
+
+The model JSON uses km and km/s, `depth_reference="local_surface"`,
+`depth_positive="down"`, `interpolation="piecewise_constant"`, finite
+`model_surface_elevation_km`, and contiguous `layers` with
+`top_depth_km`, `bottom_depth_km`, `vp_kmps`, `vs_kmps` (Vp > Vs > 0).
+Use schema_version 1 and kind `layered_1d_velocity_model`, with
+`units={"depth":"km","velocity":"km/s"}`.
+
+Grid overrides default to None (inherit the selected subnet's config). Solver
+defaults are a 200 km cutoff, 111 km/degree, 1e-6 km convergence tolerance,
+80 iterations and 32768 cells per CPU batch. Datum defaults extend the first
+layer upward and use a finite bottom. Positive/integer and geometry/model
+constraints are validated before writing. All controls are documented inline.
+
+`DRY_RUN=True` validates without writing; default False builds.
+`OVERWRITE_TABLE=False` protects the input table. Even when True, choose a new
+`OUTPUT_DIR` for a rebuild. The completed table is atomically published to
+`TABLE_DESTINATION`. Set `subnet_assoc_params["default"]["travel_time_table"]`
+to that path to use it; association otherwise retains homogeneous defaults.
+Do not replace an input table while workers are reading it.
+
+
 Range-level PAL exports now include `association_rates_<TIME_RANGE>.csv`
 beside the phase/catalog files. It concatenates daily station-date rates with
 one header, preserving counts and ratios for negative training sample selection.

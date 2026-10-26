@@ -71,7 +71,7 @@ pal_dir = PALM_ROOT / "PAL_src"
 case_config_file = "config_aws_%s.py" % CASE_CODE
 job_code = "%s-assoc-%d" % (CASE_CODE, study_year)
 pal_files = (
-    "associator_pal.py",
+    "associator_pal.py", "travel_time_table_io.py",
     "association_runner.py",
     "data_pipeline_aws.py", "station_inventory.py",
     "phase_merge.py",

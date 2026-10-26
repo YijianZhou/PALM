@@ -6,6 +6,46 @@ helpers are shared from `../PAL_src/`.
 
 ## Configuration
 
+P/S phase-picking QC (CPU and GPU workflows):
+
+- `adaptive_p_window = True` shortens each station's P correlation template
+  when its configured post-P duration reaches the template S arrival. The
+  exclusive end is S; pre-P duration stays unchanged. Template norms and the
+  continuous-data slice are adjusted together, preserving the configured lag
+  search range. Detection and S templates remain unchanged. This uses the
+  template P-S separation, not an independently known S time in a new event.
+- `reject_boundary_phase_shifts = True` excludes P/S differential times at
+  either endpoint of `pick_win_p` / `pick_win_s` from hypoDD `dt.cc`, independently
+  for each phase. These windows are `[before, after]` seconds. The check uses
+  the original sample-grid lag before event-origin correction, in addition to
+  the existing CC and maximum phase-shift checks. Raw phase measurements remain
+  available for inspection; an endpoint is unreliable, not proof of a false event.
+
+Both switches require boolean values and default to True for older configs.
+Existing fixed-length template shards can be reused: adaptive trimming occurs
+at correlation time. Re-run scanning to update P estimates; reassociation alone
+can apply the boundary exclusion to existing raw measurements.
+
+`config_<case>.py` exposes `template_num_groups = 1` for the GPU scanner.
+It must be a positive integer (booleans/fractional values are rejected).
+One group preserves template order and scans all loaded templates together;
+larger values automatically partition the validated templates into sequential
+groups by location and retained station overlap. Requested groups are capped
+at the number of loaded templates. Each template is scanned exactly once/day.
+Station selection, max_sta, detection thresholds, phase picking, and final
+association are unchanged. Raw output order can differ for multiple groups.
+
+Only stations used by a group's templates are loaded onto the GPU, including
+when group count is one. Group counts and required inventory-station counts
+are printed at startup. Grouping runs once per scanner process, after waveform
+template validation. The day loop loads/scans/releases each group in sequence;
+shared stations may be read again, but always use the same previous-day raw
+tail. All detections go to the existing combined files and final association.
+Group count does not guarantee GPU fit: correlation workspace also needs room.
+CPU scanning ignores this GPU-memory control and retains its existing behavior.
+Older configs without the setting default to one group. No template recut is
+needed. The active workflow forwards this config through `PALM_MFT_CONFIG`.
+
 The packaged example uses `CASE_CODE = "eg"` and `config_eg.py`. For a new case,
 copy the numbered scripts and config with a common suffix, then change
 `CASE_CODE`, paths, time ranges, and model parameters in their user-settings

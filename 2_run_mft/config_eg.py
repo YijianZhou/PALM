@@ -13,14 +13,17 @@ class Config(object):
     # MFT params
     self.min_sta = 4               # min sta num for template event
     self.max_sta = 15              # max sta num for template event
+    self.template_num_groups = 1   # GPU scan groups (positive integer); 1 keeps all templates together.
     self.temp_win_det = [1.,9.]    # temp win for detection, pre & post P
     self.temp_win_p = [0.5,1.5]    # temp win for p pick, pre & post P
+    self.adaptive_p_window = True # Boolean: stop each P template before its S arrival.
     self.temp_win_s = [0.5,2.5]    # temp win for s pick, pre & post S
     self.trig_thres = 0.3          # cc thres for det & peak expansion
     self.expand_len = 1.           # win len for cc peak expansion
     self.det_gap = 5.              # gap sec for detection
     self.pick_win_p = [1.0,1.0]    # search win for P pick
     self.pick_win_s = [1.6,1.6]    # search win for S pick
+    self.reject_boundary_phase_shifts = True # Boolean: exclude search-endpoint P/S lags from hypoDD.
     self.chn_p = [2]               # chn for P pick
     self.chn_s = [0,1]             # chn for S pick
     self.amp_win = [1,5]           # win for amp measurement
