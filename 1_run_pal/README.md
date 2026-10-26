@@ -126,15 +126,19 @@ completed/skipped days and identifies the worker of the latest station update.
 Worker failures stop the run and report the relevant log; completed outputs
 remain resumable. Config factories must be importable (as in the examples),
 and executable scripts must use their existing `__main__` guard.
-Association
-divides the dates into at most num_workers contiguous blocks. Each worker
-processes all subnets for its current day, sharing one full buffered pick array;
-each subnet receives a station-filtered copy. A three-day parsed-pick cache
-evicts older entries as the block advances. Fully resumed dates require no
-pick reads. Only block-boundary halos and the later association-rate pass can
-reread daily picks; separate subnets no longer cause extra reads. No full-study
-pick inventory is retained in RAM. Subnet association is sequential within a
-worker; blocks run in parallel, so a very short interval may use fewer workers.
+Buffered offline association queues pending dates chronologically, one date per
+task, rather than assigning fixed date blocks. The existing worker setting is
+an upper limit: effective workers = min(requested workers, pending dates).
+Fully completed dates are preflight-skipped using the existing policy and
+output checks; partially completed dates recheck each subnet in the worker.
+All subnets share a date's buffered picks. Persistent processes retain their
+table and bounded pick caches, although neighboring workers may read overlapping
+pick files. No pending dates means no raw-association pool; merge/finalization
+still proceed. Progress includes active PID/date pairs and unexpected worker
+exits raise an error. Resume with unchanged settings and overwrite disabled.
+
+See [association performance](../PAL_src/README.md#association-performance)
+for per-worker cache memory and diagnostic details.
 
 Changing association buffer mode or seconds invalidates association resume
 statuses; old statuses without this policy are recomputed. Picks are unchanged.
@@ -157,6 +161,22 @@ The file named for nominal date `D` owns P arrivals in
 `[D - data_buffer_sec, D + 1 day - data_buffer_sec)`. Association and daily
 event filtering use the same shifted bounds. Set `data_buffer_sec = 0` to
 retain strict UTC-day ownership without edge context.
+## Runtime Reporting
+
+Routine PAL picking and buffered association/merge/finalization reports default
+to 60 seconds, configured by `Config.progress_interval_sec` (finite positive
+seconds). Startup, failures and final summaries remain immediate. Completed
+dates no longer bypass the interval. Detailed per-event diagnostic files are unchanged.
+
+Missing event waveform files are expected for inactive stations and are shown
+only with the existing `console_verbosity = "debug"` setting. Default and quiet
+console modes suppress these messages; gain fallback, malformed-channel and
+other warnings remain visible.
+
+Detailed `[assoc]` attempt/cache reports are hidden in default console mode;
+use `console_verbosity = "debug"` to inspect them. See the
+[shared-source documentation](../PAL_src/README.md#console-reporting).
+
 ## Local Workflow
 
 Local picking reports concise console progress every 30 seconds and after each
