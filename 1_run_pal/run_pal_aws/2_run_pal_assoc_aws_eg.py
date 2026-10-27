@@ -39,6 +39,7 @@ time_range = "20200101-20210101"  # Exclusive end date.
 study_year = 2020
 
 num_workers = 6
+ASSOCIATION_TABLE_DIR = "/opt/ml/processing/work/input"  # Nonempty writable container-local shared-table directory.
 overwrite = False
 retry_failed_days = True
 association_buffer_enabled = False
@@ -74,6 +75,7 @@ job_code = "%s-assoc-%d" % (CASE_CODE, study_year)
 pal_files = (
     "associator_pal.py", "travel_time_table_io.py",
     "association_runner.py",
+    "association_tables.py",
     "data_pipeline_aws.py", "station_inventory.py",
     "phase_merge.py",
     "pick_ensemble.py",
@@ -214,6 +216,7 @@ def main():
         "out_root": "output/%s_assoc" % CASE_CODE,
         "time_range": time_range,
         "num_workers": num_workers,
+        "association_table_dir": ASSOCIATION_TABLE_DIR,
         "overwrite": overwrite,
         "retry_failed_days": retry_failed_days,
         "association_buffer_enabled": association_buffer_enabled,

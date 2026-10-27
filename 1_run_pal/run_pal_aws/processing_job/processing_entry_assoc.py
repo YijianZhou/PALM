@@ -96,6 +96,7 @@ def main():
         assoc_root=output_dir,
         time_range=runtime["time_range"],
         num_workers=int(runtime["num_workers"]),
+        association_table_dir=work_path(runtime.get("association_table_dir", "input")),
         config_factory=config_module.Config,
         overwrite=bool(runtime["overwrite"]),
         retry_failed_days=bool(runtime["retry_failed_days"]),

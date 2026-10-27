@@ -23,6 +23,7 @@ TIME_RANGE = "20190704-20190707"  # Exclusive end date.
 # USER SETTINGS: EXECUTION
 # ============================================================================
 NUM_WORKERS = 3
+ASSOCIATION_TABLE_DIR = "./input"  # Nonempty writable shared-table directory; relative to launch directory.
 OVERWRITE = False
 RETRY_FAILED_DAYS = True
 
@@ -53,6 +54,7 @@ def main():
         assoc_root=case_path(OUT_ROOT),
         time_range=TIME_RANGE,
         num_workers=NUM_WORKERS,
+        association_table_dir=ASSOCIATION_TABLE_DIR,
         config_factory=cfg.Config,
         overwrite=OVERWRITE,
         retry_failed_days=RETRY_FAILED_DAYS,

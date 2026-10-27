@@ -20,7 +20,7 @@ TIME_RANGE = "20190704-20190707"  # Exclusive end date.
 # ============================================================================
 # USER SETTINGS: EXECUTION
 # ============================================================================
-NUM_WORKERS = 3  # Independent contiguous date-block processes.
+NUM_WORKERS = 3  # Positive integer persistent workers pulling unfinished dates.
 threads_per_worker = 2  # Native numerical-library thread limit per process.
 OVERWRITE = False
 

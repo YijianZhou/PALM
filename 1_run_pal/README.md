@@ -1,5 +1,18 @@
 # Run PAL
 
+## Shared Association Tables
+
+Step 2 retains date-wise multiprocessing but shares read-only float32 P/S tables
+across its workers. Set ASSOCIATION_TABLE_DIR in the executable: default
+"./input" locally, or "/opt/ml/processing/work/input" inside AWS Processing.
+The path must be nonempty and writable with room for one uncompressed table
+set per distinct station geometry/grid/model encountered. Tables are prepared
+once on first use; gains and association thresholds remain worker-specific.
+The temporary run directory is removed after workers exit; hard-killed runs may
+leave orphan caches. Do not remove a live cache. Original .paltt files and
+association results/resume rules are unchanged. See PAL_src/README.md for memory
+accounting and cleanup details.
+
 ## Optional layered-model travel-time preparation
 
 To derive a model from UCVM, follow the [regional 1D model guide](../preprocess/build_1d_velo_mod/README.md).
@@ -124,21 +137,24 @@ the canonical origin-time cut; this groups boundary duplicates with slightly
 different estimated origins.
 
 Finish local picking (including halo days) before starting
-association. Local picking divides the requested interval (including halo days)
-into at most `NUM_WORKERS` contiguous whole-day blocks. Each spawned process
-handles its days and stations sequentially, retaining rolling tails within its
-block and reading predecessor context directly at block starts/resume gaps.
-Blocks write disjoint daily outputs and require no inter-worker waveform
+association. Local picking checks the requested interval (including halo days)
+for completed pick/count/ownership outputs and queues only unfinished dates.
+At most `NUM_WORKERS` persistent processes pull dates dynamically, capped to
+pending work; completed resumes need no spawned workers. Each worker handles
+stations serially, reuses raw tails for consecutive assignments and reads only
+the preceding day's final `2 * data_buffer_sec` span after date jumps.
+Dates write disjoint daily outputs and require no inter-worker waveform
 exchange. The top-level `threads_per_worker` setting controls native numerical
 thread pools per process (example default: 2, matching AWS). It is not a station
 thread count and does not make every filtering operation multithreaded.
 Benchmark 1 versus 2 or more on representative days; avoid oversubscribing the
 available CPUs with the product of processes and native threads.
-Each block has a `pick_<block-start>-<block-end>.log`; parent progress aggregates
+Each worker has a `pick_<range>_worker<N>.log`; parent progress aggregates
 completed/skipped days and identifies the worker of the latest station update.
 Worker failures stop the run and report the relevant log; completed outputs
-remain resumable. Config factories must be importable (as in the examples),
-and executable scripts must use their existing `__main__` guard.
+remain resumable, and existing completion markers remain valid with overwrite
+disabled. Config factories must be importable (as in the examples), and
+executable scripts must use their existing `__main__` guard.
 Buffered offline association queues pending dates chronologically, one date per
 task, rather than assigning fixed date blocks. The existing worker setting is
 an upper limit: effective workers = min(requested workers, pending dates).
