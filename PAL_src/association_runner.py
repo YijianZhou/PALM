@@ -177,6 +177,14 @@ def buffered_pick_interval_arrays(
     return picks[(picks["sta_ot"] >= start) & (picks["sta_ot"] < end)]
 
 
+def _new_associator(stations, params):
+    if _SHARED_TABLE_DIRECTORY is not None:
+        from association_tables import shared_associator
+        return shared_associator(stations, params, _SHARED_TABLE_DIRECTORY, _SHARED_TABLE_LOCK)
+    import associator_pal
+    return associator_pal.PS_Pair_Assoc(stations, **params)
+
+
 def associate_subnet_picks(
     observed_date, subnet, station_file, picks,
     output_catalog, output_phase, cfg, associator_cache,
@@ -208,9 +216,7 @@ def associate_subnet_picks(
                     for old_key in list(associator_cache):
                         if old_key[0] == subnet and old_key != key:
                             del associator_cache[old_key]
-                    associator = associator_pal.PS_Pair_Assoc(
-                        stations, **get_assoc_params(cfg, subnet)
-                    )
+                    associator = _new_associator(stations, get_assoc_params(cfg, subnet))
                     associator_cache[key] = associator
             else:
                 with associator_cache_lock:
@@ -219,9 +225,7 @@ def associate_subnet_picks(
                         for old_key in list(associator_cache):
                             if old_key[0] == subnet and old_key != key:
                                 del associator_cache[old_key]
-                        associator = associator_pal.PS_Pair_Assoc(
-                            stations, **get_assoc_params(cfg, subnet)
-                        )
+                        associator = _new_associator(stations, get_assoc_params(cfg, subnet))
                         associator_cache[key] = associator
             print('[assoc] date={} subnet={} buffered_picks={} stations={}'.format(
                 observed_date, subnet, len(picks), len(stations)), flush=True)
@@ -479,7 +483,7 @@ def write_association_rate(
     # AI workflow configs declare continuous model pickers, not STA/LTA triggers.
     # Do not infer the denominator from whether an inventory happens to exist.
     trigger_counts = (
-        None if hasattr(cfg, "picker_pos_neg_group") else
+        None if hasattr(cfg, "picker_local_group") else
         read_trigger_counts(pick_dir, observed_date, required=True)
     )
     owned_start, owned_end = processing_day_bounds(cfg, observed_date)
@@ -502,6 +506,7 @@ class AssociationRun:
     overwrite: bool
     retry_failed_days: bool
     association_buffer_enabled: bool
+    association_table_dir: str = "./input"
 
     def config(self):
         module = importlib.import_module(self.config_module)
@@ -824,12 +829,16 @@ def _partition_raw_tasks(items):
 
 _PROGRESS_QUEUE = None
 _RAW_CONTEXT = None
+_SHARED_TABLE_DIRECTORY = None
+_SHARED_TABLE_LOCK = None
 
 
-def _init_progress(queue):
-    global _PROGRESS_QUEUE, _RAW_CONTEXT
+def _init_progress(queue, table_directory=None, table_lock=None):
+    global _PROGRESS_QUEUE, _RAW_CONTEXT, _SHARED_TABLE_DIRECTORY, _SHARED_TABLE_LOCK
     _PROGRESS_QUEUE = queue
     _RAW_CONTEXT = None
+    _SHARED_TABLE_DIRECTORY = table_directory
+    _SHARED_TABLE_LOCK = table_lock
 
 
 def _report_progress(label, state):
@@ -922,10 +931,19 @@ def _run_parallel(function, items, worker_count):
             progress.show(force=True)
             return skipped
     queue = multiprocessing.Queue()
+    import tempfile
+    table_store = None
     try:
+        if raw:
+            from association_tables import validate_table_dir
+            directory = validate_table_dir(run.association_table_dir)
+            Path(directory).mkdir(parents=True, exist_ok=True)
+            table_store = tempfile.TemporaryDirectory(prefix="pal_assoc_", dir=directory)
+        table_lock = multiprocessing.Lock() if raw else None
         with multiprocessing.Pool(
             processes=min(worker_count, len(items)),
-            initializer=_init_progress, initargs=(queue,),
+            initializer=_init_progress,
+            initargs=(queue, table_store.name if table_store else None, table_lock),
         ) as pool:
             workers = list(pool._pool)
             pending = pool.map_async(_progress_task, [(function, item) for item in items], chunksize=1)
@@ -950,6 +968,8 @@ def _run_parallel(function, items, worker_count):
     finally:
         queue.close()
         queue.join_thread()
+        if table_store is not None:
+            table_store.cleanup()
 
 
 def _require_success(stage, results, run=None):
@@ -993,9 +1013,12 @@ def run_daily_association(
     overwrite=False,
     retry_failed_days=True,
     association_buffer_enabled=True,
+    association_table_dir="./input",
 ):
     """Associate target days, optionally using adjacent-day pick and event halos."""
     console_cfg = config_factory()
+    from association_tables import validate_table_dir
+    association_table_dir = validate_table_dir(association_table_dir)
     runtime_console.configure(console_cfg)
     run = AssociationRun(
         subnet_station_files={
@@ -1009,6 +1032,7 @@ def run_daily_association(
         overwrite=bool(overwrite),
         retry_failed_days=bool(retry_failed_days),
         association_buffer_enabled=bool(association_buffer_enabled),
+        association_table_dir=association_table_dir,
     )
     if not run.subnet_station_files:
         raise ValueError("at least one subnet station file is required")
@@ -1198,6 +1222,7 @@ def run_buffered_association(
     association_buffer_enabled=True,
     output_catalog=None,
     output_phase=None,
+    association_table_dir="./input",
 ):
     """Run daily association and optionally produce legacy range-level files."""
     run_daily_association(
@@ -1210,6 +1235,7 @@ def run_buffered_association(
         overwrite=overwrite,
         retry_failed_days=retry_failed_days,
         association_buffer_enabled=association_buffer_enabled,
+        association_table_dir=association_table_dir,
     )
     if (output_catalog is None) != (output_phase is None):
         raise ValueError("output_catalog and output_phase must be provided together")

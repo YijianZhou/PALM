@@ -90,9 +90,10 @@ class StationPhaseTables:
             if station in self.stations:
                 geometry = tuple(float(v) for v in self.stations[station][:3])
                 tp, ts, valid = self.reader.lookup('.'.join(station.split('.')[:2]), self.cells, geometry)
-                tp, ts = np.where(valid, tp, np.inf), np.where(valid, ts, np.inf)
+                tp = np.where(valid, tp, np.inf).astype(np.float32)
+                ts = np.where(valid, ts, np.inf).astype(np.float32)
             else:
-                tp = np.full(self.cells.shape, np.inf)
+                tp = np.full(self.cells.shape, np.inf, dtype=np.float32)
                 ts = tp.copy()
             self.cached[station] = (tp.reshape(self.reader.shape), ts.reshape(self.reader.shape))
             self.load_seconds += time.monotonic() - started

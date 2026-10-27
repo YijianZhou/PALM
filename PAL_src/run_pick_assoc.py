@@ -20,6 +20,8 @@ def main():
     parser.add_argument("--num_pick_workers", type=int, default=1)
     parser.add_argument("--num_assoc_workers", type=int, default=1)
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--association_table_dir", default="./input",
+                        help="Writable directory for shared read-only PAL tables (not OS temp)")
     args = parser.parse_args()
 
     assoc_root = Path(args.out_assoc_root) if args.out_assoc_root else (
@@ -45,6 +47,7 @@ def main():
         config_factory=config_pal.Config,
         overwrite=args.overwrite,
         association_buffer_enabled=True,
+        association_table_dir=args.association_table_dir,
         output_catalog=args.out_ctlg,
         output_phase=args.out_pha,
     )

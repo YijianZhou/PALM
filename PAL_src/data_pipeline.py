@@ -341,7 +341,8 @@ def _validate_mseed_fragments(stream, target_rate, source):
         )
 
 
-def _read_local_fragments(st_paths, start_time=None, end_time=None):
+def _read_local_fragments(st_paths, start_time=None, end_time=None, timing=None):
+    import time
     read_kwargs = {}
     if start_time is not None:
         read_kwargs["starttime"] = UTCDateTime(start_time)
@@ -349,7 +350,12 @@ def _read_local_fragments(st_paths, start_time=None, end_time=None):
         read_kwargs["endtime"] = UTCDateTime(end_time)
     stream = Stream()
     for path in dict.fromkeys(st_paths):
-        stream += read(path, **read_kwargs)
+        started = time.perf_counter()
+        try:
+            stream += read(path, **read_kwargs)
+        finally:
+            if timing is not None:
+                timing["waveform_read_worker_sec"] = timing.get("waveform_read_worker_sec", 0.0) + time.perf_counter() - started
     return stream
 
 
@@ -641,7 +647,7 @@ def read_data(
     location_priority=DEFAULT_LOCATION_PRIORITY,
     channel_priority=DEFAULT_CHANNEL_PRIORITY,
     station_selection_order="channel_first",
-    *, to_prep=None,
+    *, to_prep=None, timing=None,
 ):
     """Read local waveforms, optionally select/merge raw traces, and calibrate."""
     if to_clean is None:
@@ -668,7 +674,7 @@ def read_data(
                 continue
             current = read_data(paths, sta_dict, lower, upper,
                 normalize_to_three_channels, to_clean, location_priority,
-                channel_priority, station_selection_order)
+                channel_priority, station_selection_order, timing=timing)
             if current:
                 combined = merge_cached_tail(current, combined,
                     min(tr.stats.starttime for tr in list(combined) + list(current)),
@@ -678,7 +684,7 @@ def read_data(
     try:
         if normalize_to_three_channels:
             st_paths = select_local_paths(st_paths, channel_priority, location_priority, station_selection_order)
-        stream = _read_local_fragments(st_paths, start_time, end_time)
+        stream = _read_local_fragments(st_paths, start_time, end_time, timing)
     except Exception as exc:
         print("bad data read: {}".format(exc))
         return Stream()

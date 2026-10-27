@@ -5,6 +5,20 @@ procedure are in [CHANGELOG_INTERNAL.md](CHANGELOG_INTERNAL.md).
 
 ## Unreleased
 
+- Dynamically distribute unfinished local PAL picking dates across persistent
+  workers, preserving resume checks and shifted-day waveform buffers.
+
+- Offline PAL initial association now shares read-only float32 tables across
+  date workers, including saved travel-time archives. Launchers expose
+  `ASSOCIATION_TABLE_DIR`; date scheduling and association criteria are unchanged.
+
+- Store PAL P/S travel-time tables in float32, halving dense table memory and
+  shared-cache payload where used. New travel-time archives also store float32;
+  existing float64 archives remain compatible and are not rewritten. Grid and
+  absolute-time precision are unchanged.
+
+- Keep PAL travel-time table construction messages at debug console verbosity.
+
 - AWS workflows now include a local step-0 travel-time table builder (JSON,
   CSV or paired CRE); submissions automatically upload configured .paltt files.
 

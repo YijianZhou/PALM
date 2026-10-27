@@ -3,6 +3,7 @@ from numbers import Integral
 import time
 import numpy as np
 from magnitude_qc import magnitude_parameters, station_magnitude_summary
+from runtime_console import debug
 
 
 def format_assoc_time(value):
@@ -123,6 +124,7 @@ class PS_Pair_Assoc(object):
     ot_dev: max time dev for ot assoc
     velo_mod: homogeneous [Vp, Vs] km/s; finite Vp > Vs > 0
     travel_time_table: None/numeric NaN or single-file .paltt; overrides spatial grid and velo_mod
+    P/S travel-time arrays use float32 storage; geometry and absolute times retain their precision.
     max_res: strict P/S residual limits in seconds (default [1.2, 1.2]); scalar applies to both
     max_drop: allowed rejections from successful detections before removing a pick
     unique_stations: count distinct station identifiers (default True); keep all candidate pairs
@@ -482,9 +484,9 @@ class PS_Pair_Assoc(object):
         self._table_reader = reader
         self._station_tables = StationPhaseTables(reader, self.sta_dict)
         self.tt_s_dict = self._station_tables.view(1)
-        print('using saved P/S travel table:', self.travel_time_table)
+        debug('using saved P/S travel table: {}'.format(self.travel_time_table))
         return self._station_tables.view(0)
-    print('making time table')
+    debug('making time table')
     tt_dict = {}
     self.tt_s_dict = {}
     # get x-y range: sta range + margin
@@ -526,8 +528,8 @@ class PS_Pair_Assoc(object):
         distance = np.sqrt(
             dz**2 + dx[None, :, None]**2 + dy[None, None, :]**2
         )
-        tt_dict[net_sta] = distance / self.velo_mod[0]
-        self.tt_s_dict[net_sta] = distance / self.velo_mod[1]
+        tt_dict[net_sta] = (distance / self.velo_mod[0]).astype(np.float32)
+        self.tt_s_dict[net_sta] = (distance / self.velo_mod[1]).astype(np.float32)
     self.lat_min, self.lon_min = lat_min, lon_min
     return tt_dict
 

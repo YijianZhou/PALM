@@ -7,6 +7,7 @@ import time
 from threading import Event, Lock, Thread
 from datetime import datetime, timedelta
 from pathlib import Path
+from numbers import Integral
 
 
 def parse_date_range(time_range):
@@ -81,7 +82,10 @@ def run_parallel_local_pick(
     include_association_halo=False,
     threads_per_worker=1,
 ):
-    """Process contiguous date blocks independently, with serial stations."""
+    """Queue pending dates across persistent processes, with serial stations."""
+    for name, value in [('num_workers', num_workers), ('threads_per_worker', threads_per_worker)]:
+        if isinstance(value, bool) or not isinstance(value, Integral) or value < 1:
+            raise ValueError('{} must be a positive integer'.format(name))
     from run_pick import run_pick
     interval = getattr(config_factory(), 'progress_interval_sec', 60)
 
@@ -101,7 +105,7 @@ def run_parallel_local_pick(
         raise ValueError("threads_per_worker must be positive")
     if int(num_workers) > 1 or threads_per_worker != 1:
         from local_pick_blocks import run_blocks
-        print("PAL picking: {} date-block processes | one station at a time per process".format(
+        print("PAL picking: up to {} pending-date workers | one station at a time per process".format(
             min(int(num_workers), (end - start).days)), flush=True)
         print("Native numerical threads per worker: {}".format(threads_per_worker), flush=True)
         with _LocalPickProgress(sys.stdout, (end - start).days, interval) as progress:

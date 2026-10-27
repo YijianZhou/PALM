@@ -380,7 +380,9 @@ def build(config_path, dry_run=False, settings=None):
                           depth+h, h-station['elevation_m']/1000, phase,
                           solver['distance_tolerance_km'], solver['max_iterations'])
                           for start in range(0, len(distance), solver['batch_size'])]
-                result.append(np.concatenate(chunks) if chunks else np.empty(0))
+                # Solve in float64, store relative P/S travel times in float32.
+                result.append(np.concatenate(chunks).astype(np.float32)
+                              if chunks else np.empty(0, dtype=np.float32))
         station['file'] = f'station_{k:05d}.npz'
         station['covered_source_cells'] = int(len(distance)*shape[0])
         tp, ts = np.concatenate(ptimes), np.concatenate(stimes)
@@ -395,6 +397,7 @@ def build(config_path, dry_run=False, settings=None):
         if sha256(paths[key]) != digest:
             raise RuntimeError('Model JSON/CSV/CRE changed during calculation; rebuild from stable inputs')
     manifest = dict(schema_version=1, kind='pal_sparse_ps_travel_time_table',
+                    travel_time_dtype='float32',
                     created_utc=datetime.now(timezone.utc).isoformat(), solver='flat_layers_direct_and_head_waves',
                     units=dict(distance='km', time='s', station_elevation='m'),
                     flatten_order='C: [depth, longitude, latitude]', config=cfg, summary=summary,

@@ -10,7 +10,30 @@ duplicate AI model packages, training code, or real-time AI inference here.
 `pick_ensemble.py` is retained because current phase merging understands the
 extended pick schema even when a PAL-only workflow produces legacy PAL picks.
 
+## Travel-Time Precision Study
+
+Production P/S travel-time arrays and newly built `.paltt` archives use float32.
+Geometry, grid coordinates, ray solving, and absolute-time precision are unchanged.
+Legacy float64 archives remain readable: PAL converts loaded P/S arrays without
+rewriting the archive. This is a fixed storage policy, not a tuning parameter.
+The reproducible precision experiment in
+`../../AI-PAL/PAL_src/tests/test_associator_precision.py` also passes against
+PALM: 96 realistic synthetic runs (192 events, 100-Hz observations) are unchanged
+by float32 table rounding. Constructed strict-threshold and spatial near-tie
+cases change OT by 0.1 s or location by one grid cell despite prediction errors
+below one sample. Saved `.paltt` coverage is tested; real-catalog impact has not
+been benchmarked. See AI-PAL's internal change record for the complete design.
+
 ## Console Reporting
+
+The shared local waveform reader accepts an optional internal `timing`
+dictionary for accumulated read/decode seconds (including failed reads).
+Default callers and waveform selection/calibration are unchanged. This supports
+AI-PAL offline timing; PALM does not acquire AI postprocessing or plotting code.
+
+Travel-time table construction (`making time table`) and saved-table selection
+messages are debug-only, including calls without an installed stdout filter.
+Use `console_verbosity = "debug"` or `AI_PAL_CONSOLE_VERBOSITY=debug` to show them.
 
 Console detail is controlled by the existing `console_verbosity` setting:
 `default` retains workflow progress and warnings but hides detailed `[assoc]`
@@ -155,12 +178,30 @@ search bounds and scientific settings are unchanged. The diagnostic
 `failure_cache_hits` counts candidate neighborhoods skipped using this cache
 (including duplicate centers), not distinct cached clusters.
 
-Saved-table association retains decoded P/S arrays on first station use and
-reuses them across searches and dates with unchanged station geometry. Each
-worker has its own cache; budget about 625 MiB for 182 stations on a 225,216-cell
-float64 P/S grid, in addition to other worker memory. The buffered runner retires
-old geometry caches per subnet. No association thresholds or config defaults
-change. With debug console verbosity, daily logs include input counts, exponentially
+Offline date-wise association now uses a run-owned read-only float32 table store.
+The first worker needing a geometry builds/decodes and publishes its whole P/S
+table set under a process lock; subsequent workers map the same file. Table
+lookup/search has no shared lock. Gains and association thresholds remain private
+and do not create duplicate tables; station geometry, grid/model or saved-file
+identity changes create a distinct set. Existing date scheduling/resume is unchanged.
+Budget about 313 MiB for one 182-station, 225,216-cell P/S set, not per worker;
+private search arrays and one builder's temporary arrays remain additional.
+
+Local launchers expose ASSOCIATION_TABLE_DIR="./input"; the buffered runner also
+accepts association_table_dir. It must be a nonempty writable directory, with
+relative paths resolved against the launch directory. AWS defaults to
+/opt/ml/processing/work/input on the container volume. Never use OS /tmp.
+Each run creates an isolated pal_assoc_* directory, retained through the raw
+association stage and cleaned only after all workers exit, including normal
+exception cleanup. Hard termination can leave orphan directories; remove those
+only after confirming their owning run has stopped. No persistent cross-run
+cache is assumed. Disk use accumulates distinct historical geometries during
+the stage; allow sufficient space. A resumed run with no pending days builds
+no store. Existing .paltt inputs are not modified.
+
+The shared helper is association_tables.py, also used by AI-PAL's realtime pool.
+Direct standalone PS_Pair_Assoc callers still use private arrays unless attached
+to a shared store. With debug console verbosity, daily logs include input counts, exponentially
 spaced attempt diagnostics, and a completion summary. Table-load time is cumulative for the
 current cache; location-search time includes table loading.
 

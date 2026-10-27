@@ -50,9 +50,16 @@ def _write_ownership(pick_path, buffer_sec):
     os.replace(partial, path)
 
 
+def pick_is_complete(out_pick_dir, date, buffer_sec):
+    """Use the same pick/count/ownership contract for preflight and execution."""
+    path = os.path.join(out_pick_dir, "{}.pick".format(date))
+    return (os.path.isfile(path) and trigger_count_path(out_pick_dir, date).is_file()
+            and _has_current_ownership(path, buffer_sec))
+
+
 def run_pick(
     time_range, data_dir, sta_file, out_pick_dir, cfg, overwrite=False,
-    num_workers=1, progress_callback=None,
+    num_workers=1, progress_callback=None, _date_tasks=None,
 ):
     get_data_dict = cfg.get_data_dict
     read_data = cfg.read_data
@@ -131,16 +138,19 @@ def run_pick(
     previous_raw_tails = None
     print("run pick: raw_waveform --> picks")
     print("time range: {} to {}".format(start_date.date, end_date.date))
-    for day_idx in range(num_days):
-        date = start_date + day_idx * 86400
+    previous_date = None
+    assigned_dates = (start_date + index * 86400 for index in range(num_days)) if _date_tasks is None else (
+        UTCDateTime(value) for value in _date_tasks)
+    for date in assigned_dates:
+        if previous_date is None or date - previous_date != 86400:
+            previous_raw_tails = None
+        previous_date = date
         progress("starting day", date.date)
         pick_path = os.path.join(out_pick_dir, "{}.pick".format(date.date))
         count_path = trigger_count_path(out_pick_dir, date.date)
         if (
-            os.path.exists(pick_path)
-            and count_path.exists()
-            and not overwrite
-            and _has_current_ownership(pick_path, buffer_sec)
+            not overwrite
+            and pick_is_complete(out_pick_dir, date.date, buffer_sec)
         ):
             print("skip existing picks: {}".format(pick_path))
             previous_raw_tails = None

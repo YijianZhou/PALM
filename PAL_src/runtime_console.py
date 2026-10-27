@@ -2,12 +2,15 @@
 
 import os
 import sys
+import time
+import math
 from threading import Lock
 
 
 LEVELS = {"quiet": 0, "default": 1, "debug": 2}
 _ORIGINAL_STDOUT = sys.stdout
 _ACTIVE_STREAM = None
+_VERBOSITY = 'default'
 
 
 def normalize_verbosity(value):
@@ -84,12 +87,13 @@ class _FilteredConsole(object):
 
 def configure(cfg=None, verbosity=None):
     """Install the output filter and return the resolved verbosity."""
-    global _ACTIVE_STREAM
+    global _ACTIVE_STREAM, _VERBOSITY
     configured = verbosity
     if configured is None and cfg is not None:
         configured = getattr(cfg, "console_verbosity", None)
     configured = os.environ.get("AI_PAL_CONSOLE_VERBOSITY", configured)
     configured = normalize_verbosity(configured)
+    _VERBOSITY = configured
     if configured == "debug":
         sys.stdout = _ORIGINAL_STDOUT
         _ACTIVE_STREAM = None
@@ -106,5 +110,33 @@ def log(tag, message, flush=True):
     print("[{}] {}".format(tag, message), flush=flush)
 
 
+def debug(message):
+    if os.environ.get('AI_PAL_CONSOLE_VERBOSITY', _VERBOSITY) == 'debug':
+        print(message, flush=True)
+
+
 def warning(message, flush=True):
     print("[WARN] {}".format(message), flush=flush)
+
+
+class Progress:
+    """Report stage start, throttled completed units, and stage completion."""
+    def __init__(self, label, total, interval_sec=60.0, enabled=True):
+        if isinstance(interval_sec, bool) or not math.isfinite(interval_sec) or interval_sec <= 0:
+            raise ValueError('progress_interval_sec must be finite and positive')
+        self.label, self.total, self.interval = label, total, interval_sec
+        self.enabled = enabled
+        self.started = self.last_report = time.monotonic()
+        self.finished = total == 0
+        if enabled:
+            log('progress', '{} 0/{} | elapsed 0s'.format(label, total))
+
+    def update(self, completed):
+        if not self.enabled or self.finished:
+            return
+        now = time.monotonic()
+        if completed >= self.total or now - self.last_report >= self.interval:
+            log('progress', '{} {}/{} | elapsed {:.0f}s'.format(
+                self.label, completed, self.total, now - self.started))
+            self.last_report = now
+            self.finished = completed >= self.total
