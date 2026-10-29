@@ -4,15 +4,12 @@ Phase Picking, Association, Location, and Matched Filter workflow for building
 high-resolution earthquake catalogs. PAL or AI-PAL detections can provide the
 event templates used by the matched-filter (MFT) stage.
 
-PALM v5.0 reorganizes the package into numbered executable workflows and shared
-PAL and MFT source packages. It adds compact dual-rate NPY template storage,
-buffered daily MFT scanning, high-resolution phase refinement, and final MFT
-association products ready for hypoDD relocation.
+The package combines numbered executable workflows with shared PAL and MFT
+source packages. It supports template preparation, buffered daily matched-filter
+scanning, high-resolution phase refinement, and association products ready for
+hypoDD relocation.
 
 ![PALM workflow](References/PALM_workflow.jpg)
-
-Current release preparation: **v5.1**. See the [changelog](CHANGELOG.md)
-for major changes since v5.0. Future changes are tracked against this baseline.
 
 ## Project Layout
 
@@ -111,6 +108,8 @@ GPU MFT additionally requires a CUDA-compatible PyTorch installation. External
 location workflows require their corresponding hypoInverse or hypoDD binaries.
 
 ## References
+
+For release history, see the [changelog](CHANGELOG.md).
 
 - **Zhou, Y.**, H. Ding, A. Ghosh, and Z. Ge (2025). AI-PAL:
   Self-Supervised AI Phase Picking via Rule-Based Algorithm for Generalized

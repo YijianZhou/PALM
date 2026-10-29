@@ -5,90 +5,41 @@ procedure are in [CHANGELOG_INTERNAL.md](CHANGELOG_INTERNAL.md).
 
 ## Unreleased
 
-- Dynamically distribute unfinished local PAL picking dates across persistent
-  workers, preserving resume checks and shifted-day waveform buffers.
+Future changes will be recorded relative to v5.2.
 
-- Offline PAL initial association now shares read-only float32 tables across
-  date workers, including saved travel-time archives. Launchers expose
-  `ASSOCIATION_TABLE_DIR`; date scheduling and association criteria are unchanged.
+## v5.2 - Release Preparation
 
-- Store PAL P/S travel-time tables in float32, halving dense table memory and
-  shared-cache payload where used. New travel-time archives also store float32;
-  existing float64 archives remain compatible and are not rewritten. Grid and
-  absolute-time precision are unchanged.
+Changes since v5.1. Prepared 2026-10-29; GitHub publication/tagging is performed separately.
 
-- Keep PAL travel-time table construction messages at debug console verbosity.
+- Improve PAL association with distinct-station counting, P/S residual checks,
+  configurable origin-time grid search, adaptive spatial coverage, and faster
+  candidate searches with reuse of failed-search results.
+- Support precomputed travel-time archives built from JSON, combined Vp/Vs CSV,
+  or paired CRE velocity models. Include example 1D model preparation and local
+  table-building launchers for local and AWS workflows.
+- Store travel-time arrays in float32 and share read-only tables across offline
+  date workers. Existing float64 archives remain readable. Shared stores use
+  executable `ASSOCIATION_TABLE_DIR`, never system temp, with checked writes
+  and normal-run cleanup.
+- Dynamically schedule unfinished PAL picking and association dates, retaining
+  resume checks, waveform buffers, and persistent workers.
+- Use `nan` for missing station gains; gain `1` is valid for calibrated data.
+  Missing-gain stations remain usable for picking but not magnitude.
+- Simplify default progress output while retaining detailed debug diagnostics.
+  Multi-control launchers use stage-specific `XXX_NUM_WORKERS` names.
+- Add automatic GPU template grouping through `template_num_groups` (default 1),
+  scanning groups sequentially and loading only their required stations.
+- Adapt MFT P correlation windows to template S arrivals and exclude P/S
+  differential times at search boundaries from relocation by default.
+  Both options are configurable and aligned across CPU/GPU paths.
 
-- AWS workflows now include a local step-0 travel-time table builder (JSON,
-  CSV or paired CRE); submissions automatically upload configured .paltt files.
+### Migration Notes
 
-- Build PAL travel-time tables from combined Vp/Vs CSV or paired P/S CRE,
-  as well as JSON, with explicit preparation-only datum/bottom settings.
-
-- Include the same configurable 1D velocity-model preprocessing example as
-  AI-PAL, with a documented JSON handoff to PAL travel-time-table preparation.
-
-- Hide detailed PAL association attempt/cache counters at normal console
-  verbosity; retain them with console_verbosity="debug".
-
-- Default routine picking and association console progress to 60 seconds,
-  including rapid date-completion updates; preserve immediate failure reports.
-
-- Balance offline association dynamically across pending dates, retain worker
-  caches, report active dates, and fail promptly on unexpected worker exits.
-
-- Avoid repeating failed association searches after unrelated events are found,
-  without restricting the spatial search or changing association thresholds.
-
-- Reuse decoded station travel-time tables during association instead of
-  repeatedly loading them; add flushed search diagnostics to daily logs.
-
-- Added optional local `0_build_travel_time_table_eg.py` preparation with
-  editable settings at the top and a shared `PAL_src` helper; no separate
-  builder configuration file is needed.
-
-- Use `nan` for unavailable station gains; gain `1` now correctly permits
-  already-calibrated data to contribute to magnitude. Missing-gain stations
-  remain usable for picking. Migrate older gain-1 placeholders before rerunning.
-
-- Adapt MFT P correlation windows to each station's template S arrival and
-  exclude search-boundary P/S differential times from hypoDD relocation by
-  default. Both behaviors are configurable; CPU and GPU paths are aligned.
-
-- Association now accepts only homogeneous `velo_mod=[Vp, Vs]` or a saved
-  `travel_time_table` (.paltt). Build layered-model tables separately; runtime
-  model-file inputs and `layered_model_options` have been removed from active
-  workflows. Existing saved tables and homogeneous settings remain compatible.
-
-- Load precomputed P/S times from one `.paltt` file using optional
-  `travel_time_table`; skip unavailable station/cell pairs safely.
-
-- Accept scalar `max_res=r` as shorthand for equal P/S residual limits `[r, r]`.
-
-- PAL spatial association now checks both P and S arrivals. Configure homogeneous
-  `velo_mod=[5.9, 3.5]` (km/s) and `max_res=[res_p, res_s]` (seconds);
-  active workflow configs are migrated, retaining regional tolerances.
-
-- Speed up PAL association with sliding-window station counts, local count
-  updates, stable pick indices, and reused per-cluster calculations. Existing
-  association settings and selection rules are preserved.
-
-- PAL now counts distinct stations by default (`unique_stations=True`) while
-  retaining alternative P-S pairs for spatial selection. Failed neighborhoods
-  yield to alternative centers; retries no longer discard their candidates.
-  Fix adaptive grid coverage and preserve internal location precision. Catalog
-  coordinates use four decimal places for lat/lon and one for depth.
-
-- GPU MFT can scan automatic template groups sequentially with
-  `template_num_groups` (default 1), loading only each group's required stations
-  to reduce daily waveform memory. Detection and final association rules remain
-  unchanged.
-
-- PAL association now searches up to ten origin times at 0.1-second spacing
-  near the cluster median, bounded by its 5th-95th percentiles. Solutions maximize
-  associated count, then minimize median absolute P residual. Temporal step,
-  maximum span, and point count are configurable per subnet (defaults: 0.1 s,
-  1.0 s, and 10 points).
+- Replace old gain-1 placeholders with `nan` only where gains are unavailable.
+- Runtime association uses homogeneous `velo_mod=[Vp, Vs]` or a saved
+  `travel_time_table`; build layered-model tables before running association.
+- Ensure `ASSOCIATION_TABLE_DIR` has enough disk space for shared tables.
+  Per-worker search workspaces still require additional RAM.
 
 
 
